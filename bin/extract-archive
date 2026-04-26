@@ -1,0 +1,287 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || { echo 'Fatal: MKS_ROOT is not set!' >&2; exit 3; }
+
+# bin/extract-archive -- detect how to extract common archive/compressed files
+#
+# Usage:
+#   extract-archive --file <path> [--extract] [--folder <dir>]
+#
+# Options:
+#   --file    <path>   Archive or compressed file to inspect (required)
+#   --extract          Actually run the detected extraction command (requires tools)
+#   --folder  <dir>    Directory to extract into (created if missing)
+#   --help|-h          Show this help and exit
+# ---------------------------------------------------------------------------
+
+
+# -- Source libraries
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+
+readonly _SELF="${0##*/}"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  exit "${exit_code}"
+}
+
+_on_error() {
+  printf 'ERROR: %s failed at line %d (exit %d)\n' \
+    "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage: print usage block and exit 1
+usage() {
+  sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed -n 's/^# \{0,1\}//p'
+  exit 1
+}
+
+# -- _detect_and_report: detect archive type and optionally extract one file
+# INTERNAL: positional only -- do not call outside this file
+# Usage: _detect_and_report <path> <extract:0|1> <target_dir>
+#   $1  path to the archive or compressed file
+#   $2  1 = extract, 0 = detect only
+#   $3  target directory (empty = current dir)
+_detect_and_report() {
+  local file="${1}"
+  local do_extract="${2}"
+  local tgt_dir="${3}"
+
+  if [[ ! -e "${file}" ]]; then
+    lib::std::logger --level error --message "not found: ${file}"
+    return 1
+  fi
+
+  local mime desc suggested
+  mime="${ file --mime-type -b -- "${file}"; }"
+  desc="${ file -b -- "${file}"; }"
+
+  suggested="unknown"
+  local -a bins=()
+
+  # -- Prefer mime-type; fall back to descriptive text
+  case "${mime}" in
+    application/zip)
+      suggested="unzip -l \"${file}\""
+      bins=(unzip)
+      ;;
+    application/x-tar)
+      suggested="tar -tf \"${file}\""
+      bins=(tar)
+      ;;
+    application/gzip|application/x-gzip)
+      if gzip -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        suggested="tar -xzf \"${file}\""
+        bins=(tar)
+      else
+        suggested="gzip -d \"${file}\"  # or gunzip"
+        bins=(gzip)
+      fi
+      ;;
+    application/x-bzip2)
+      if bzip2 -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        suggested="tar -xjf \"${file}\""
+        bins=(tar)
+      else
+        suggested="bzip2 -d \"${file}\"  # or bunzip2"
+        bins=(bzip2)
+      fi
+      ;;
+    application/x-xz|application/x-x-xz)
+      if xz -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        suggested="tar -xJf \"${file}\""
+        bins=(tar)
+      else
+        suggested="xz -d \"${file}\"  # or unxz"
+        bins=(xz)
+      fi
+      ;;
+    application/zstd|application/x-zstd)
+      if zstd -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        suggested="zstd -dc \"${file}\" | tar -xf -"
+        bins=(tar zstd)
+      else
+        suggested="zstd -d \"${file}\"  # or unzstd"
+        bins=(zstd)
+      fi
+      ;;
+    *)
+      # Fallback: inspect descriptive text for well-known keywords
+      if [[ "${desc}" == *gzip* ]]; then
+        if gzip -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+          suggested="tar -xzf \"${file}\""
+          bins=(tar)
+        else
+          suggested="gzip -d \"${file}\""
+          bins=(gzip)
+        fi
+      elif [[ "${desc}" == *bzip2* || "${desc}" == *bzip* ]]; then
+        suggested="bzip2 -d \"${file}\""
+        bins=(bzip2)
+      elif [[ "${desc}" == *XZ* || "${desc}" == *xz* ]]; then
+        suggested="xz -d \"${file}\""
+        bins=(xz)
+      elif [[ "${desc}" == *Zip* || "${desc}" == *zip* ]]; then
+        suggested="unzip -l \"${file}\""
+        bins=(unzip)
+      elif [[ "${desc}" == *7-zip* || "${desc}" == *7z* ]]; then
+        suggested="7z l \"${file}\""
+        bins=(7z)
+      elif [[ "${desc}" == *RAR* || "${desc}" == *rar* ]]; then
+        suggested="unrar l \"${file}\""
+        bins=(unrar)
+      elif [[ "${desc}" == *'compress (LZW)'* ]]; then
+        suggested="uncompress \"${file}\""
+        bins=(uncompress)
+      elif [[ "${desc}" == *tar* ]]; then
+        suggested="tar -tf \"${file}\""
+        bins=(tar)
+      fi
+      ;;
+  esac
+
+  printf 'File:        %s\n' "${file}"
+  printf 'Description: %s\n' "${desc}"
+  printf 'Inferred:    %s\n' "${suggested}"
+
+  if [[ ${#bins[@]} -eq 0 ]]; then
+    printf 'Required binaries: (unknown)\n'
+  else
+    printf 'Required binaries:\n'
+    local b bpath
+    for b in "${bins[@]}"; do
+      bpath="${ command -v "${b}" 2>/dev/null; }" || true
+      if [[ -n "${bpath}" ]]; then
+        printf '  - %s: FOUND (%s)\n' "${b}" "${bpath}"
+      else
+        printf '  - %s: MISSING\n' "${b}"
+      fi
+    done
+  fi
+
+  (( do_extract )) || return 0
+
+  # -- Verify required binaries before proceeding
+  local missing=0
+  for b in "${bins[@]}"; do
+    if ! command -v "${b}" >/dev/null 2>&1; then
+      lib::std::logger --level error --message "required binary missing: ${b}"
+      (( missing++ )) || true
+    fi
+  done
+  (( missing == 0 )) || return 2
+
+  # -- Prepare target directory (create if --folder was given)
+  local tgt="."
+  if [[ -n "${tgt_dir}" ]]; then
+    tgt="${tgt_dir}"
+    mkdir -p -- "${tgt}"
+  fi
+
+  lib::std::logger --level info --message "Extracting ${file} -> ${tgt}"
+
+  local base outname
+  base="${file##*/}"
+  outname="${base%.*}"
+
+  case "${mime}" in
+    application/zip)
+      unzip -o -q -- "${file}" -d "${tgt}"
+      ;;
+    application/x-tar)
+      tar -C "${tgt}" -xf "${file}"
+      ;;
+    application/gzip|application/x-gzip)
+      if gzip -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        tar -C "${tgt}" -xzf "${file}"
+      else
+        gzip -dc -- "${file}" > "${tgt}/${outname}"
+      fi
+      ;;
+    application/x-bzip2)
+      if bzip2 -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        tar -C "${tgt}" -xjf "${file}"
+      else
+        bzip2 -dc -- "${file}" > "${tgt}/${outname}"
+      fi
+      ;;
+    application/x-xz|application/x-x-xz)
+      if xz -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        tar -C "${tgt}" -xJf "${file}"
+      else
+        xz -dc -- "${file}" > "${tgt}/${outname}"
+      fi
+      ;;
+    application/zstd|application/x-zstd)
+      if zstd -dc -- "${file}" 2>/dev/null | tar -tf - >/dev/null 2>&1; then
+        zstd -dc -- "${file}" | tar -C "${tgt}" -xf -
+      else
+        zstd -dc -- "${file}" > "${tgt}/${outname}"
+      fi
+      ;;
+    *)
+      if tar -tf -- "${file}" >/dev/null 2>&1; then
+        tar -C "${tgt}" -xf "${file}"
+      elif unzip -l -- "${file}" >/dev/null 2>&1; then
+        unzip -o -q -- "${file}" -d "${tgt}"
+      else
+        lib::std::logger --level error --message "no extraction rule for: ${file}"
+        return 3
+      fi
+      ;;
+  esac
+}
+
+# -- main: parse options and run detection/extraction
+main() {
+  local -A opts=(
+    [file]=""
+    [extract]=0
+    [folder]=""
+  )
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --extract)  opts[extract]=1; shift 1                               ;;
+      --file)     [[ -z "${2:-}" ]] && {
+                    printf '%s: --file requires an argument\n' \
+                      "${_SELF}" >&2; exit 1
+                  }
+                  opts[file]="$2"; shift 2                               ;;
+      --folder)   [[ -z "${2:-}" ]] && {
+                    printf '%s: --folder requires an argument\n' \
+                      "${_SELF}" >&2; exit 1
+                  }
+                  opts[folder]="$2"; shift 2                             ;;
+      --help|-h)  usage                                                  ;;
+      --)         shift; break                                           ;;
+      --*)        printf '%s: unknown option: %s\n' \
+                    "${_SELF}" "$1" >&2; usage                        ;;
+      *)          break                                                  ;;
+    esac
+  done
+
+  if [[ $# -gt 0 ]]; then
+    printf '%s: unexpected argument: %s\n' "${_SELF}" "$1" >&2; usage
+  fi
+
+  if [[ -z "${opts[file]}" ]]; then
+    printf '%s: --file is required\n' "${_SELF}" >&2; exit 1
+  fi
+
+  _detect_and_report "${opts[file]}" "${opts[extract]}" "${opts[folder]}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

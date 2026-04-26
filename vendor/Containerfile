@@ -1,0 +1,136 @@
+FROM ubuntu:26.04 AS bootstrap
+WORKDIR /build
+
+# Capture OS codename for bash binary naming
+RUN . /etc/os-release && \
+    echo "${VERSION_CODENAME}" > /tmp/codename
+
+RUN apt update && DEBIAN_FRONTEND=noninteractive apt install -y \
+    build-essential \
+    bash-static \
+    musl-tools \
+    musl-dev \
+    wget \
+    curl \
+    jq \
+    xz-utils \
+    unzip \
+    file \
+    cmake \
+    clang \
+    git
+
+# -- bash (from apt) + make (musl-compiled from source)
+# Copy bash-static as codename-specific binary, create mks-bash symlink
+RUN . /etc/os-release && \
+    mkdir -p /local/bin /local/bin/dev && \
+    cp /usr/bin/bash-static "/local/bin/${VERSION_CODENAME}-bash" && \
+    ln -s "${VERSION_CODENAME}-bash" /local/bin/mks-bash && \
+    ln -s "${VERSION_CODENAME}-bash" /local/bin/bash && \
+    cp /tmp/codename /local/bin/.codename && \
+    wget https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz \
+    && tar -xzf make-4.4.1.tar.gz \
+    && cd make-4.4.1 \
+    && CC=musl-gcc ./configure \
+         --prefix=/usr/local/musl-make \
+         LDFLAGS="-static" \
+         CFLAGS="-std=gnu11 -g -O2" \
+    && make -j$(nproc) \
+    && cp make /local/bin/make
+
+# -- curl + trurl (stunnel/static-curl, musl+ech variant)
+RUN ver="$(curl -s https://api.github.com/repos/stunnel/static-curl/releases/latest | jq -r '.tag_name')" \
+    && echo "stunnel/static-curl latest: ${ver}" \
+    && wget -O curl-bundle.tar.xz \
+      "https://github.com/stunnel/static-curl/releases/download/${ver}/curl-linux-x86_64-musl-${ver}.tar.xz" \
+    && tar xJf curl-bundle.tar.xz curl trurl \
+    && mv curl trurl /local/bin/
+
+# -- jq (jqlang/jq)
+RUN wget -O /local/bin/jq \
+    https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64
+
+# -- yq (mikefarah/yq)
+RUN wget -O /local/bin/yq \
+    https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+
+# -- jinja (mitsuhiko/minijinja-cli, musl)
+RUN wget -O minijinja.tar.xz \
+    https://github.com/mitsuhiko/minijinja/releases/latest/download/minijinja-cli-x86_64-unknown-linux-musl.tar.xz \
+    && tar xJf minijinja.tar.xz --strip-components=1 \
+         minijinja-cli-x86_64-unknown-linux-musl/minijinja-cli \
+    && mv minijinja-cli /local/bin/jinja
+
+# -- age (FiloSottile/age)
+RUN ver="$(curl -s https://api.github.com/repos/FiloSottile/age/releases/latest | jq -r '.tag_name')" \
+    && echo "FiloSottile/age latest: ${ver}" \
+    && wget -O age.tar.gz \
+      "https://github.com/FiloSottile/age/releases/download/${ver}/age-${ver}-linux-amd64.tar.gz" \
+    && tar xzf age.tar.gz \
+    && mv age/age /local/bin/age \
+    && mv age/age-keygen age/age-inspect age/age-plugin-batchpass /local/bin/dev/
+
+# -- shellcheck (koalaman/shellcheck)
+RUN ver="$(curl -s https://api.github.com/repos/koalaman/shellcheck/releases/latest | jq -r '.tag_name')" \
+    && echo "koalaman/shellcheck latest: ${ver}" \
+    && wget -O shellcheck.tar.gz \
+      "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.x86_64.tar.gz" \
+    && tar xzf shellcheck.tar.gz \
+    && mv "shellcheck-${ver}/shellcheck" /local/bin/dev/shellcheck
+
+# -- bashunit (TypedDevs/bashunit)
+RUN curl -s https://bashunit.typeddevs.com/install.sh | bash -s /local/bin/dev
+
+# -- packer (hashicorp/packer)
+RUN ver="$(curl -s https://checkpoint-api.hashicorp.com/v1/check/packer | jq -r '.current_version')" \
+    && echo "hashicorp/packer latest: ${ver}" \
+    && wget "https://releases.hashicorp.com/packer/${ver}/packer_${ver}_linux_amd64.zip" \
+    && unzip "packer_${ver}_linux_amd64.zip" packer -d /local/bin/dev/ \
+    && rm "packer_${ver}_linux_amd64.zip"
+
+# -- jsonnet (google/go-jsonnet)
+RUN ver="$(curl -s https://api.github.com/repos/google/go-jsonnet/releases/latest | jq -r '.tag_name')" \
+    && echo "google/go-jsonnet latest: ${ver}" \
+    && wget -O jsonnet.tar.gz \
+      "https://github.com/google/go-jsonnet/releases/download/${ver}/go-jsonnet_${ver#v}_linux_amd64.tar.gz" \
+    && tar xzf jsonnet.tar.gz jsonnet jsonnetfmt jsonnet-lint \
+    && mv jsonnet jsonnetfmt jsonnet-lint /local/bin/dev/ \
+    && rm jsonnet.tar.gz
+
+# -- hcl2json (tmccombs/hcl2json)
+RUN wget -O /local/bin/dev/hcl2json \
+    https://github.com/tmccombs/hcl2json/releases/download/v0.6.9/hcl2json_linux_amd64
+
+# -- jsonschema (sourcemeta/jsonschema - built from source)
+RUN git clone https://github.com/sourcemeta/jsonschema.git /tmp/jsonschema \
+    && cd /tmp/jsonschema \
+    && cmake -S . -B ./build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DJSONSCHEMA_PORTABLE:BOOL=ON \
+      -DCMAKE_EXE_LINKER_FLAGS="-static --target=x86_64-linux-musl" \
+      -DCMAKE_C_FLAGS="--target=x86_64-linux-musl" \
+      -DCMAKE_CXX_FLAGS="--target=x86_64-linux-musl" \
+      -DCMAKE_ASM_MASM_COMPILER=false \
+    && cmake --build ./build --config Release --parallel $(nproc) \
+    && strip build/src/jsonschema \
+    && mv build/src/jsonschema /local/bin/dev/jsonschema \
+    && rm -rf /tmp/jsonschema
+
+# -- ensure all binaries are executable
+RUN chmod 0755 /local/bin/* /local/bin/dev/*
+
+# -- validate all binaries have no shared library dependencies
+RUN find /local/bin -type f | while read -r bin; do \
+    info="$(file "${bin}")"; \
+    printf 'file: %s\n' "${info}"; \
+    out="$(ldd "${bin}" 2>&1)"; \
+    printf 'ldd:  %s\n' "${out}"; \
+    printf '%s' "${out}" | grep -qE 'not a dynamic executable|statically linked' \
+      || { printf 'FAIL: has dynamic dependencies: %s\n' "${bin}" >&2; exit 1; }; \
+    printf 'OK (no dynamic deps): %s\n' "${bin##*/}"; \
+    done
+
+FROM scratch AS output
+COPY --from=bootstrap /local/bin/ /

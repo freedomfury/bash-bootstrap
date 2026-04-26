@@ -1,0 +1,120 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Packer Shell-Local Provisioner",
+    "type": "object",
+    "properties": {
+        "type": {
+            "const": "shell-local"
+        },
+        "command": {
+            "type": "string",
+            "description": "A single command to execute localy. Written to a temp file and run via execute_command."
+        },
+        "inline": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "An array of commands to execute. Concatenated into a single file and run in one context."
+        },
+        "script": {
+            "type": "string",
+            "description": "The path to a local script to execute on the host machine."
+        },
+        "scripts": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "An array of local scripts to execute in the order specified."
+        },
+        "env": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string"
+            },
+            "description": "Map of key/value pairs to inject into the local environment."
+        },
+        "environment_vars": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of key=value pairs to inject into the local environment."
+        },
+        "env_var_format": {
+            "type": "string",
+            "description": "String template for environment variables (e.g., '%s=%s && ' for Windows)."
+        },
+        "execute_command": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "The command used to execute the script. Default varies by OS."
+        },
+        "inline_shebang": {
+            "type": "string",
+            "description": "The shebang value to use for inline commands. Default is /bin/sh -e."
+        },
+        "only_on": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of runtime operating systems where this provisioner will execute."
+        },
+        "use_linux_pathing": {
+            "type": "boolean",
+            "description": "For Windows hosts: tells Packer to use WSL-style paths (e.g., /mnt/c/...) for scripts."
+        },
+        "valid_exit_codes": {
+            "type": "array",
+            "items": {
+                "type": "integer"
+            },
+            "description": "Exit codes considered successful. Defaults to [0]."
+        },
+        "pause_before": {
+            "type": "string",
+            "description": "Duration to sleep before execution."
+        },
+        "max_retries": {
+            "type": "integer",
+            "description": "Number of times to retry on failure."
+        },
+        "timeout": {
+            "type": "string",
+            "description": "Maximum time allowed for the provisioner to run."
+        },
+        "only": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Only run this provisioner for the listed builder(s) by name."
+        }
+    },
+    "oneOf": [
+        {
+            "required": [
+                "command"
+            ]
+        },
+        {
+            "required": [
+                "inline"
+            ]
+        },
+        {
+            "required": [
+                "script"
+            ]
+        },
+        {
+            "required": [
+                "scripts"
+            ]
+        }
+    ]
+}

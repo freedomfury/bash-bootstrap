@@ -1,0 +1,29 @@
+#!/bin/sh
+# bashunit/build -- Build extracted documentation from upstream.
+# Can be run from the root as ./bashunit/build or from inside the bashunit directory.
+
+set -eu
+
+_BIN_DIR="$(dirname "$0")"
+cd "$_BIN_DIR" || exit 1
+
+printf '==- bashunit/build: building documentation... -==\n'
+
+# -- Clean existing output if present
+if [ -d "output" ]; then
+    ./clean
+fi
+
+# -- Create output directory
+mkdir -p output/
+
+# -- Build Docker image
+docker build -t bashunit-docs -f Containerfile .
+
+# -- Run container to extract files
+docker run --rm \
+    -v "$_BIN_DIR/output:/output-out" \
+    bashunit-docs \
+    sh -c "cp -r /output/* /output-out/"
+
+printf '==- bashunit/build: complete. -==\n'

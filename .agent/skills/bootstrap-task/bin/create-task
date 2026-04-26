@@ -1,0 +1,245 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || { echo 'Fatal: MKS_ROOT is not set!' >&2; exit 3; }
+
+# .agent/skills/bootstrap-task/bin/create-task -- create bootstrap task skeletons
+#
+# Usage:
+#   create-task --name <task-name> [options]
+#
+# Options:
+#   --name <name>       Task name (lowercase, numbers, hyphens only) (required)
+#   --type <type>       Task type: minimal or complete (default: complete)
+#   --wire              Wire task into bootstrap.d/main.mk (default)
+#   --no-wire           Skip main.mk wiring
+#   --template <path>   Custom template directory (default: .agent/skills/bootstrap-task/__task__)
+#   --help|-h           Show this help and exit
+# --
+
+# -- Source libraries
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+readonly _SELF="${0##*/}"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  exit "${exit_code}"
+}
+
+_on_error() {
+  printf 'ERROR: %s failed at line %d (exit %d)\n' \
+    "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage: print usage block and exit 1
+usage() {
+  sed -n '/^# Usage:/,/^# --$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+# -- _die: log error and exit
+_die() {
+  lib::std::logger -l error -m "$1"
+  exit 1
+}
+
+# -- _validate_name: ensure task name meets naming rules
+_validate_name() {
+  local name="${1}"
+
+  [[ -n "${name}" ]] \
+    || _die "--name is required"
+
+  [[ "${name}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] \
+    || _die "invalid task name '${name}': use lowercase letters, numbers, and hyphens only"
+
+  [[ "${name}" != "__task__" ]] \
+    || _die "reserved name '__task__' cannot be used as a task name"
+}
+
+# -- _copy_template: copy template to target, apply substitutions
+_copy_template() {
+  local name="${1}"
+  local name_upper="${2}"
+  local template_dir="${3}"
+  local target_dir="${4}"
+  local task_type="${5}"
+
+  [[ -d "${template_dir}" ]] \
+    || _die "template directory not found: ${template_dir}"
+
+  cp -r "${template_dir}" "${target_dir}"
+
+  # Apply substitutions to all regular files
+  local file
+  while IFS= read -r -d '' file; do
+    sed -i "s/__task__/${name}/g; s/__TASK__/${name_upper}/g" "${file}"
+  done < <(find "${target_dir}" -type f -print0)
+
+  # Make entry executable
+  chmod +x "${target_dir}/entry"
+
+  # For minimal type, remove the extra directories
+  if [[ "${task_type}" == "minimal" ]]; then
+    rm -rf "${target_dir}/bin" "${target_dir}/lib" "${target_dir}/tmpl" "${target_dir}/files"
+  else
+    # For complete type, ensure all directories exist
+    mkdir -p "${target_dir}/bin" "${target_dir}/lib" "${target_dir}/tmpl" "${target_dir}/files"
+  fi
+}
+
+# -- _verify_no_markers: ensure no unreplaced placeholders remain
+_verify_no_markers() {
+  local target_dir="${1}"
+
+  local found
+  found="$(grep -rl '__task__\|__TASK__' "${target_dir}" 2>/dev/null || true)"
+
+  [[ -z "${found}" ]] \
+    || _die "unreplaced markers found in:\n${found}"
+}
+
+# -- _wire_main_mk: add task target to bootstrap.d/main.mk
+_wire_main_mk() {
+  local name="${1}"
+  local main_mk="${MKS_ROOT}/bootstrap.d/main.mk"
+
+  [[ -f "${main_mk}" ]] \
+    || _die "bootstrap.d/main.mk not found"
+
+  # Add to .PHONY line
+  if ! grep -q "^\.PHONY:.*[[:space:]]${name}\b" "${main_mk}"; then
+    sed -i "s/^\(\.PHONY:.*\)/\1 ${name}/" "${main_mk}"
+  fi
+
+  # Add to tasks: prerequisite list
+  if ! grep -q "^tasks:.*[[:space:]]${name}\b" "${main_mk}"; then
+    sed -i "s/^\(tasks:.*\)/\1 ${name}/" "${main_mk}"
+  fi
+
+  # Append task target block if not already present
+  if ! grep -q "^${name}:" "${main_mk}"; then
+    cat >> "${main_mk}" <<TASK
+
+${name}: bootstrap.d/exports
+	@echo "==- bootstrap::${name} -=="
+	source bootstrap.d/exports
+	bootstrap.d/tasks/${name}/entry
+TASK
+  fi
+}
+
+# -- _validate_output: verify the created task meets contract
+_validate_output() {
+  local name="${1}"
+  local target_dir="${2}"
+  local do_wire="${3}"
+
+  # entry exists and is executable
+  [[ -x "${target_dir}/entry" ]] \
+    || _die "validation failed: entry is not executable"
+
+  # vars/default.env exists
+  [[ -f "${target_dir}/vars/default.env" ]] \
+    || _die "validation failed: vars/default.env missing"
+
+  # No unreplaced markers
+  _verify_no_markers "${target_dir}"
+
+  # Verify main.mk wiring if applicable
+  if [[ "${do_wire}" -eq 1 ]]; then
+    local main_mk="${MKS_ROOT}/bootstrap.d/main.mk"
+    grep -q "^${name}:" "${main_mk}" \
+      || _die "validation failed: ${name} target missing from main.mk"
+    grep -q "^tasks:.*[[:space:]]${name}" "${main_mk}" \
+      || _die "validation failed: ${name} not in tasks: prerequisites"
+  fi
+}
+
+# -- _run_scoped_validation: run the newly created task in isolation
+_run_scoped_validation() {
+  local name="${1}"
+  local do_wire="${2}"
+  local target_dir="${3}"
+
+  lib::std::logger -l info -m "${_SELF}: running scoped validation for '${name}'"
+
+  if [[ "${do_wire}" -eq 1 ]]; then
+    (cd "${MKS_ROOT}" && source exports && make --no-print-directory "${name}")
+  else
+    (cd "${MKS_ROOT}" && source exports && source bootstrap.d/exports && "${target_dir}/entry")
+  fi
+}
+
+# -- main: entry point
+main() {
+  local name=""
+  local task_type="complete"
+  local do_wire=1
+  local template_dir="${MKS_ROOT}/.agent/skills/bootstrap-task/__task__"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)      name="$2";          shift 2 ;;
+      --type)      task_type="$2";     shift 2 ;;
+      --wire)      do_wire=1;          shift 1 ;;
+      --no-wire)   do_wire=0;          shift 1 ;;
+      --template)  template_dir="$2";  shift 2 ;;
+      --help|-h)   usage ;;
+      --)          shift; break ;;
+      --*)
+        printf '%s: unknown option: %s\n' "${_SELF}" "$1" >&2
+        usage
+        ;;
+    esac
+  done
+
+  # -- Validate inputs
+  [[ -n "${name}" ]] \
+    || _die "--name is required"
+
+  _validate_name "${name}"
+
+  [[ "${task_type}" == "minimal" || "${task_type}" == "complete" ]] \
+    || _die "invalid --type '${task_type}': must be 'minimal' or 'complete'"
+
+  local name_upper
+  name_upper="$(printf '%s' "${name}" | tr '[:lower:]-' '[:upper:]_')"
+
+  local target_dir="${MKS_ROOT}/bootstrap.d/tasks/${name}"
+
+  [[ ! -d "${target_dir}" ]] \
+    || _die "task directory already exists: ${target_dir}"
+
+  # -- Create task
+  lib::std::logger -l info -m "${_SELF}: creating '${name}' task (type=${task_type}, wire=${do_wire})"
+
+  _copy_template "${name}" "${name_upper}" "${template_dir}" "${target_dir}" "${task_type}"
+
+  # -- Wire into main.mk
+  if [[ "${do_wire}" -eq 1 ]]; then
+    _wire_main_mk "${name}"
+    lib::std::logger -l info -m "${_SELF}: wired '${name}' into bootstrap.d/main.mk"
+  fi
+
+  # -- Validate output
+  _validate_output "${name}" "${target_dir}" "${do_wire}"
+
+  # -- Scoped runtime validation
+  _run_scoped_validation "${name}" "${do_wire}" "${target_dir}"
+
+  lib::std::logger -l info -m "${_SELF}: task '${name}' created successfully"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

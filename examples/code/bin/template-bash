@@ -1,0 +1,87 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || { echo 'Fatal: MKS_ROOT is not set!' >&2; exit 3; }
+
+# examples/code/bin/template -- example Bash script template following project spec
+#
+# Usage:
+#   template --input <path> [--output <path>] [--dry-run] [--verbose]
+#
+# Options:
+#   -i, --input  <path>   Input file to process (required)
+#   -o, --output <path>   Output destination
+#   -n, --dry-run         Print actions without executing
+#   -v, --verbose         Enable verbose output
+#   -h, --help            Show this help and exit
+# ---------------------------------------------------------------------------
+
+# -- Source libraries
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+readonly _SELF="${0##*/}"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  # Clean up temp files or release locks here
+  exit "${exit_code}"
+}
+
+_on_error() {
+  printf 'ERROR: %s failed at line %d (exit %d)\n' \
+    "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage: print usage block and exit 1
+usage() {
+  sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed -n 's/^# \{0,1\}//p'
+  exit 1
+}
+
+# -- main: entry point
+main() {
+  local -A opts=(
+    [input]=""
+    [output]=""
+    [dry_run]=0
+    [verbose]=0
+  )
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -i | --input)    opts[input]="$2";   shift 2 ;;
+      -o | --output)   opts[output]="$2";  shift 2 ;;
+      -n | --dry-run)  opts[dry_run]=1;    shift 1 ;;
+      -v | --verbose)  opts[verbose]=1;    shift 1 ;;
+      -h | --help)     usage ;;
+      --)              shift; break ;;
+      --* | -*)
+        printf '%s: unknown option: %s\n' "${_SELF}" "$1" >&2
+        usage
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  # -- Validation
+  if [[ -z "${opts[input]}" ]]; then
+    printf '%s: --input is required\n' "${_SELF}" >&2
+    usage
+  fi
+
+  lib::std::logger -l info -m "Bash script execution starting..."
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

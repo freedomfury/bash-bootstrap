@@ -1,0 +1,20 @@
+{
+    "type": "shell-local",
+    "inline": [
+        "echo 'Cleaning up local temporary artifacts for build: $PACKER_BUILD_NAME'",
+        "rm -rf ./local_temp_build_files/*.tmp",
+        "ls -lh ./output-directory"
+    ],
+    "environment_vars": [
+        "CLEANUP_LEVEL=aggressive"
+    ],
+    "only_on": [
+        "linux",
+        "darwin"
+    ],
+    "valid_exit_codes": [
+        0
+    ],
+    "pause_before": "5s",
+    "timeout": "2m"
+}

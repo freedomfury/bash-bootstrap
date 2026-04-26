@@ -1,0 +1,18 @@
+{
+    "type": "ansible",
+    "playbook_file": "./playbooks/main.yml",
+    "groups": [
+        "app_servers",
+        "east_region"
+    ],
+    "host_alias": "provisioning_target",
+    "local_port": 2222,
+    "ssh_host_key_file": "/etc/packer/ssh/host_key",
+    "ssh_authorized_key_file": "/etc/packer/ssh/authorized_keys.pub",
+    "inventory_directory": "./tmp/ansible_inventory",
+    "keep_inventory_file": true,
+    "ansible_proxy_key_type": "RSA",
+    "use_sftp": true,
+    "ansible_winrm_use_http": false,
+    "pause_before": "10s"
+}

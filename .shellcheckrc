@@ -1,0 +1,4 @@
+enable=all
+severity=info
+external-sources=true
+disable=SC2154

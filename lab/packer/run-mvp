@@ -1,0 +1,145 @@
+#!/usr/bin/env mks-bash
+# shellcheck shell=bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  printf 'FATAL: MKS_ROOT is not set — run via make or source exports first\n' >&2
+  exit 3
+}
+
+# Usage:
+#   run-mvp [options]
+#
+#   Debug serial console while VM is running:
+#     socat - UNIX-CONNECT:<PACKER_CACHE_DIR>/run/<name>-<port>-serial.sock
+#
+# Options:
+#   --debug     On error, pause and keep VM running for interactive SSH
+#   --verbose   Enable verbose output
+#   --help      Show this help and exit
+# --
+
+# -- Resolve script directory (symlink-safe)
+_SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)" # isolation required
+readonly _SCRIPT_DIR
+
+# -- Constants
+readonly _SELF="${0##*/}"
+# shellcheck disable=SC2154
+readonly PACKER="${MKS_VENDOR}/dev/packer"
+readonly PACKER_CACHE="${_SCRIPT_DIR}/.packer_cache"
+readonly VIRTIOFSD_WRAPPER="${_SCRIPT_DIR}/bin/qemu-virtiofsd"
+
+# -- Traps
+_cleanup() {
+  local exit_code=$?
+  exit "${exit_code}"
+}
+
+_on_error() {
+  printf 'ERROR: %s failed at line %d (exit %d)\n' \
+    "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage
+usage() {
+  grep '^#' "${BASH_SOURCE[0]}" | grep -v '^#!' | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+# -- main
+main() {
+  local verbose=0
+  local debug=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --debug)
+      debug=1
+      shift 1
+      ;;
+    --verbose)
+      verbose=1
+      shift 1
+      ;;
+    --help | -h) usage ;;
+    --)
+      shift
+      break
+      ;;
+    --*)
+      printf '%s: unknown option: %s\n' "${_SELF}" "$1" >&2
+      usage
+      ;;
+    *)
+      printf '%s: unexpected argument: %s\n' "${_SELF}" "$1" >&2
+      exit 1
+      ;;
+    esac
+  done
+
+  ((verbose)) && printf 'opts: verbose=%d debug=%d\n' "${verbose}" "${debug}" >&2
+
+  # -- Preflight checks
+  [[ -x "${PACKER}" ]] || {
+    printf 'FATAL: packer not found at %s — run ./mks-vendor\n' "${PACKER}" >&2
+    exit 3
+  }
+
+  # -- Build Go wrapper if missing or source is newer
+  local _src_dir="${_SCRIPT_DIR}/src/qemu-virtiofsd"
+  if [[ ! -x "${VIRTIOFSD_WRAPPER}" ]] ||
+    [[ "${_src_dir}/main.go" -nt "${VIRTIOFSD_WRAPPER}" ]]; then
+    printf '%s: building qemu-virtiofsd\n' "${_SELF}"
+    (cd "${_src_dir}" && go build -o "${VIRTIOFSD_WRAPPER}" .)
+  fi
+
+  # -- Set up Packer cache directory
+  export PACKER_CACHE_DIR="${PACKER_CACHE}"
+  mkdir -p "${PACKER_CACHE}/run"
+
+  # -- Initialize Packer plugins
+  printf '%s: running packer init\n' "${_SELF}"
+  "${PACKER}" init "${_SCRIPT_DIR}"
+
+  # -- Export vars for Packer's env() function
+  export HOST_UID="${UID}"
+  export VIRTIOFSD_SHARED_DIR="${_SCRIPT_DIR}"
+  export VIRTIOFSD_WRAPPER
+  export EPOCHREALTIME
+
+  # -- Run Packer
+  local -a build_args=()
+  if ((debug)); then
+    build_args+=(-on-error=ask)
+    export PACKER_LOG=1
+    export PACKER_LOG_PATH="${PACKER_CACHE}/run/packer-debug.log"
+    printf '%s: debug mode — packer log: %s\n' "${_SELF}" "${PACKER_LOG_PATH}"
+  fi
+  printf '%s: running packer build\n' "${_SELF}"
+  "${PACKER}" build "${build_args[@]+"${build_args[@]}"}" "${_SCRIPT_DIR}"
+
+  # -- Verify results (one file per source)
+  local results_dir="${PACKER_CACHE}/run/results"
+  local -i found=0
+  for f in "${results_dir}"/*-success.txt; do
+    [[ -f "${f}" ]] || continue
+    printf '%s: SUCCESS [%s] — %s\n' "${_SELF}" "${f##*/}" "$(cat "${f}" || true)"
+    ((found++)) || true
+  done
+  if ((found == 0)); then
+    printf '%s: WARNING — Packer exited 0 but no success files found in %s\n' \
+      "${_SELF}" "${results_dir}" >&2
+  fi
+}
+
+# -- Only run main when executed directly, not when sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

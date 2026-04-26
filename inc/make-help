@@ -1,0 +1,68 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# make-help -- print documented targets from annotated Makefile(s)
+#
+# Usage:
+#   make-help [<makefile> ...]
+#
+# Targets are documented with a #@ annotation on the preceding line:
+#
+#   #@ Build the project.
+#   build: deps
+#
+# With no arguments, reads Makefile in the current directory.
+# Requires awk (POSIX standard; present on all supported platforms).
+# ---------------------------------------------------------------------------
+
+set -eu
+
+_SELF="${0##*/}"
+
+# -- Default to Makefile if no arguments given
+if [ "$#" -eq 0 ]; then
+    set -- Makefile
+fi
+
+# -- Validate: all files must be readable
+for _f in "$@"; do
+    if [ ! -r "${_f}" ]; then
+        printf '%s: cannot read: %s\n' "${_SELF}" "${_f}" >&2
+        exit 4
+    fi
+done
+
+# -- Parse and print documented targets.
+# A #@ comment on the line immediately preceding a target provides its description.
+# Targets starting with '.' (e.g. .PHONY) are skipped.
+# Any non-comment, non-target line between a #@ and its target clears the description.
+awk '
+  BEGIN { desc = ""; found = 0 }
+
+  /^#@/ {
+    desc = substr($0, 3)
+    sub(/^[[:space:]]+/, "", desc)
+    next
+  }
+
+  /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+
+  /^[^[:space:]].*:/ {
+    tgt = $0
+    sub(/:.*/, "", tgt)
+    if (substr(tgt, 1, 1) == ".") { next }
+    if (desc == "") { next }
+    printf "  %-30s%s\n", tgt, desc
+    desc = ""
+    found = 1
+    next
+  }
+
+  { desc = "" }
+
+  END {
+    if (!found) {
+      print "No documented targets found." > "/dev/stderr"
+      exit 1
+    }
+  }
+' "$@"

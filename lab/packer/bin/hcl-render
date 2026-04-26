@@ -1,0 +1,188 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+if ! declare -f mks::guard >/dev/null || ! mks::guard 2>/dev/null; then
+    printf 'Fatal - source exports first\n' >&2
+    exit 3
+fi
+
+# bin/hcl-render -- validate a JSON data file against a schema and render it to HCL
+#
+# Usage:
+#   hcl-render --input <file> --template <file> --output <file> \
+#              [--schema <file>] [--config <file>] [--fmt]
+#   hcl-render -i <file> -t <file> -o <file> \
+#              [-s <file>] [-c <file>] [-f]
+#
+# Options:
+#   -i, --input     <file>   JSON data file to render (required)
+#   -t, --template  <file>   Jinja template file (required)
+#   -o, --output    <file>   Output HCL file path (required)
+#   -s, --schema    <file>   JSON schema to validate input against
+#                            (default: schema/builder.schema.json, relative to template dir)
+#   -c, --config    <file>   Jinja config file
+#                            (default: jinja.toml, relative to template dir)
+#   -f, --fmt                Run packer fmt on the output directory after rendering
+#   -F, --force              Overwrite output file if it already exists
+#   -h, --help               Show this help and exit
+#
+# Returns:
+#   0  success
+#   1  usage error
+#   2  validation or render failure
+#   3  environment error
+# ---------------------------------------------------------------------------
+
+readonly _SELF="${0##*/}"
+
+_cleanup() {
+    local exit_code=$?
+    exit "${exit_code}"
+}
+
+_on_error() {
+    printf 'ERROR: %s failed at line %d (exit %d)\n' \
+        "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+usage() {
+    sed -n '/^# Usage:/,/^# ---/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    exit 1
+}
+
+main() {
+    local -A opts=(
+        [input]=""
+        [template]=""
+        [output]=""
+        [schema]=""
+        [config]=""
+        [fmt]=0
+        [force]=0
+    )
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        -i | --input)
+            opts[input]="$2"
+            shift 2
+            ;;
+        -t | --template)
+            opts[template]="$2"
+            shift 2
+            ;;
+        -o | --output)
+            opts[output]="$2"
+            shift 2
+            ;;
+        -s | --schema)
+            opts[schema]="$2"
+            shift 2
+            ;;
+        -c | --config)
+            opts[config]="$2"
+            shift 2
+            ;;
+        -f | --fmt)
+            opts[fmt]=1
+            shift 1
+            ;;
+        -F | --force)
+            opts[force]=1
+            shift 1
+            ;;
+        -h | --help) usage ;;
+        --)
+            shift
+            break
+            ;;
+        --* | -*)
+            printf '%s: unknown option: %s\n' "${_SELF}" "$1" >&2
+            return 1
+            ;;
+        *)
+            printf '%s: unexpected argument: %s\n' "${_SELF}" "$1" >&2
+            return 1
+            ;;
+        esac
+    done
+
+    local missing=0
+    for req in input template output; do
+        if [[ -z "${opts[${req}]}" ]]; then
+            printf '%s: required option missing: --%s\n' "${_SELF}" "${req}" >&2
+            ((missing++)) || true
+        fi
+    done
+    ((missing == 0)) || return 1
+
+    local input="${opts[input]}"
+    local template="${opts[template]}"
+    local output="${opts[output]}"
+    local template_dir="${template%/*}"
+
+    local schema="${opts[schema]:-${template_dir}/schema/builder.schema.json}"
+    local config="${opts[config]:-${template_dir}/jinja.toml}"
+
+    # -- Validate input files: must exist, be a regular file, and be readable
+    local errors=0
+    for f in "${input}" "${template}" "${schema}" "${config}"; do
+        if [[ ! -e "${f}" ]]; then
+            printf '%s: not found: %s\n' "${_SELF}" "${f}" >&2
+            ((errors++)) || true
+        elif [[ ! -f "${f}" ]]; then
+            printf '%s: not a regular file: %s\n' "${_SELF}" "${f}" >&2
+            ((errors++)) || true
+        elif [[ ! -r "${f}" ]]; then
+            printf '%s: not readable: %s\n' "${_SELF}" "${f}" >&2
+            ((errors++)) || true
+        fi
+    done
+
+    # -- Validate output path
+    local output_dir="${output%/*}"
+    if [[ -d "${output}" ]]; then
+        printf '%s: output path is a directory: %s\n' "${_SELF}" "${output}" >&2
+        ((errors++)) || true
+    elif [[ -e "${output}" ]] && [[ ! -f "${output}" ]]; then
+        printf '%s: output path exists but is not a regular file: %s\n' "${_SELF}" "${output}" >&2
+        ((errors++)) || true
+    elif [[ -f "${output}" ]] && ((!opts[force])); then
+        printf '%s: output file already exists (use --force to overwrite): %s\n' "${_SELF}" "${output}" >&2
+        ((errors++)) || true
+    elif [[ ! -d "${output_dir}" ]]; then
+        printf '%s: output directory does not exist: %s\n' "${_SELF}" "${output_dir}" >&2
+        ((errors++)) || true
+    elif [[ ! -w "${output_dir}" ]]; then
+        printf '%s: output directory is not writable: %s\n' "${_SELF}" "${output_dir}" >&2
+        ((errors++)) || true
+    fi
+
+    ((errors == 0)) || return 2
+
+    printf '%s: validating %s against %s\n' "${_SELF}" "${input##*/}" "${schema##*/}" >&2
+    "${MKS_VENDOR}/dev/jsonschema" validate "${schema}" "${input}"
+
+    printf '%s: rendering %s -> %s\n' "${_SELF}" "${template##*/}" "${output##*/}" >&2
+    jinja --safe-path "${template_dir}" \
+        --config-file "${config}" \
+        "${template}" "${input}" \
+        -o "${output}"
+
+    if ((opts[fmt])); then
+        printf '%s: formatting %s\n' "${_SELF}" "${output_dir}" >&2
+        packer fmt "${output_dir}"
+    fi
+
+    printf '%s: done\n' "${_SELF}" >&2
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

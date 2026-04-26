@@ -1,0 +1,22 @@
+{
+    "type": "shell",
+    "inline": [
+        "echo 'Starting the provisioning process...'",
+        "sudo apt-get update",
+        "sudo apt-get install -y nginx",
+        "sudo reboot"
+    ],
+    "expect_disconnect": true,
+    "start_retry_timeout": "10m",
+    "pause_before": "30s",
+    "environment_vars": [
+        "APP_ENV=production",
+        "DEBUG_MODE=false"
+    ],
+    "remote_folder": "/tmp/packer-scripts",
+    "valid_exit_codes": [
+        0,
+        2
+    ],
+    "timeout": "15m"
+}

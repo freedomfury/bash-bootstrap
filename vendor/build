@@ -1,0 +1,26 @@
+#!/bin/sh
+# vendor/build -- Build the statically-compiled project toolkit.
+# Can be run from the root as ./vendor/build or from inside the vendor directory.
+
+set -eu
+
+_BIN_DIR="$(dirname "$0")"
+cd "$_BIN_DIR" || exit 1
+
+command -v podman >/dev/null 2>&1 || {
+    printf 'ERROR: Podman is required but not installed!\n' >&2
+    exit 1
+}
+
+printf '==- vendor/build: building toolkit... -==\n'
+
+# -- Delete the sentinel
+rm -f ../vendor.lock
+# -- Delete all binaries
+rm -rf bin/ && mkdir bin/
+podman build -t build-toolkit:latest -o bin .
+
+# -- Satisfaction sentinel for the Makefile
+touch ../vendor.lock
+
+printf '==- vendor/build: complete. -==\n'

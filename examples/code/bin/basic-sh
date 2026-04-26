@@ -1,0 +1,23 @@
+#!/bin/sh
+# examples/code/bin/basic-sh -- minimal bootstrapping script (POSIX /bin/sh)
+#
+# This template is for early-stage bootstrapping before Bash is available.
+# It prioritizes simplicity and strict POSIX shell compatibility.
+# ---------------------------------------------------------------------------
+
+set -eu
+
+# -- Minimal environment guard
+if [ -z "${MKS_ROOT:-}" ]; then
+  printf 'ERROR: MKS_ROOT is not set!\n' >&2
+  exit 3
+fi
+
+# -- Direct execution logic (no main() required for these scripts)
+printf 'Bootstrapping task in progress...\n'
+
+# Example: Simple file operation
+touch bootstrap.lock
+rm bootstrap.lock
+
+printf 'Bootstrapping complete.\n'

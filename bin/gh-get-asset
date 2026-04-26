@@ -1,0 +1,175 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || { echo 'Fatal: MKS_ROOT is not set!' >&2; exit 3; }
+
+# bin/gh-get-asset -- download GitHub release binaries
+#
+# Usage:
+#   gh-get --repo <owner/repo> [--tag <tag>] [--latest] --name <substring> [--output <path>] [--force]
+#
+# Options:
+#   --repo    <owner/repo>  Repository to download from (required)
+#   --name    <substring>   Match asset filename by exact name (required)
+#   --tag     <tag>         Specific tag to download (optional)
+#   --latest                Download the latest release (default if tag omitted)
+#   --output  <path>        Destination path for downloaded file (optional)
+#   --force                 Overwrite existing output file without confirmation
+#   --help                  Show this help and exit
+#
+# Example:
+#   gh-get-asset --repo "jqlang/jq" --latest --name "jq-linux64" --output "./jq" --force
+# ---------------------------------------------------------------------------
+
+
+# -- Source libraries
+
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+# -- Constants
+readonly _SELF="${0##*/}"
+readonly _API_BASE="https://api.github.com/repos"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  # No temp files to cleanup in this version
+  exit "${exit_code}"
+}
+
+_on_error() {
+  printf 'ERROR: %s failed at line %d (exit %d)\n' \
+    "${BASH_SOURCE[0]}" "$1" "$?" >&2
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage: print usage and exit 1
+usage() {
+  sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed -n 's/^# \{0,1\}//p'
+  exit 1
+}
+
+# -- main: entry point
+main() {
+  local -A opts=(
+    [repo]=""
+    [name]=""
+    [tag]=""
+    [latest]=1
+    [output]=""
+    [force]=0
+  )
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo)    opts[repo]="$2";    shift 2 ;;
+      --name)    opts[name]="$2";    shift 2 ;;
+      --tag)     opts[tag]="$2";     opts[latest]=0; shift 2 ;;
+      --latest)  opts[latest]=1;     opts[tag]="";   shift 1 ;;
+      --output)  opts[output]="$2";  shift 2 ;;
+      --force)   opts[force]=1;      shift 1 ;;
+      --help|-h) usage ;;
+      --)        shift; break ;;
+      --*)
+        printf '%s: unknown option: %s\n' "${_SELF}" "$1" >&2
+        usage
+        ;;
+      *)
+        printf '%s: unexpected argument: %s\n' "${_SELF}" "$1" >&2
+        usage
+        ;;
+    esac
+  done
+
+  # Validation
+  [[ -n "${opts[repo]}" ]] || {
+    printf '%s: --repo is required\n' "${_SELF}" >&2
+    usage
+  }
+  [[ -n "${opts[name]}" ]] || {
+    printf '%s: --name is required\n' "${_SELF}" >&2
+    usage
+  }
+
+  lib::std::logger --level info --message "Identifying release for: ${opts[repo]}"
+
+  # Determine API endpoint
+  local url
+  if (( opts[latest] )); then
+    url="${_API_BASE}/${opts[repo]}/releases/latest"
+  else
+    url="${_API_BASE}/${opts[repo]}/releases/tags/${opts[tag]}"
+  fi
+
+  # Fetch release metadata (in-process)
+  local metadata
+  metadata="${ "${MKS_VENDOR}/curl" -sSfL \
+    --retry 3 \
+    --retry-delay 2 \
+    "${url}"; }" || {
+    lib::std::logger --level error --message "Failed to fetch release metadata from: ${url}"
+    exit 2
+  }
+
+  # Filter assets by name (exact match)
+  local download_url
+  local filename
+  # shellcheck disable=SC2016  # $name is a jq variable, not a shell variable
+  download_url="${ printf '%s' "${metadata}" | "${MKS_VENDOR}/jq" -r \
+    --arg name "${opts[name]}" \
+    '.assets[] | select(.name == $name) | .browser_download_url'; }"
+
+  # shellcheck disable=SC2016  # $name is a jq variable, not a shell variable
+  filename="${ printf '%s' "${metadata}" | "${MKS_VENDOR}/jq" -r \
+    --arg name "${opts[name]}" \
+    '.assets[] | select(.name == $name) | .name'; }"
+
+  if [[ -z "${download_url}" ]]; then
+    lib::std::logger --level error --message "No asset found with exact name: ${opts[name]}"
+    exit 2
+  fi
+
+  # Final destination
+  local output_path="${opts[output]}"
+  if [[ -z "${output_path}" ]]; then
+    output_path="${filename}"
+  fi
+
+  # Security check: forbid absolute paths, directory traversal, and silly patterns.
+  # The output must be relative to the present working directory.
+  if [[ "${output_path}" == /* ]] || [[ "${output_path}" == *../* ]]; then
+    lib::std::logger --level error --message "Invalid output path: ${output_path} (must be relative to PWD and safe)"
+    exit 1
+  fi
+
+  # Check for existing file
+  if [[ -f "${output_path}" ]] && (( ! opts[force] )); then
+    lib::std::logger --level error --message "File already exists: ${output_path} (use --force to overwrite)"
+    exit 2
+  fi
+
+  lib::std::logger --level info --message "Downloading: ${filename} -> ${output_path}"
+
+  # Download (follow redirects, retries, etc)
+  "${MKS_VENDOR}/curl" -sSfL \
+    --retry 3 \
+    --retry-delay 2 \
+    --output "${output_path}" \
+    "${download_url}" || {
+    lib::std::logger --level error --message "Download failed for asset: ${filename}"
+    exit 4
+  }
+
+  lib::std::logger --level info --message "Success: ${output_path}"
+}
+
+# -- Run when executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

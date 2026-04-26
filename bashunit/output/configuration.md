@@ -1,0 +1,581 @@
+# Configuration
+
+Environment configuration to control **bashunit** behavior.
+
+It serves to configure the behavior of bashunit in your project.
+You need to create a `.env` file in the root directory,
+but you can give it another name if you pass it as an argument to the command with
+`--env` [option](/command-line#environment).
+
+## Default path
+
+> `BASHUNIT_DEFAULT_PATH=directory|file`
+
+Specifies the `directory` or `file` containing the tests to be run. `empty` by default.
+
+If a directory is specified, it will execute tests within files ending in `bench.sh`.
+When running benchmarks (`--bench`), the same path is used to search for files ending in `bench.sh`.
+
+If you use wildcards, **bashunit** will run any tests it finds.
+
+::: code-group
+```bash [Example]
+# all tests inside the tests directory
+BASHUNIT_DEFAULT_PATH=tests
+
+# concrete test by full path
+BASHUNIT_DEFAULT_PATH=tests/example_test.sh
+
+# all test matching given wildcard
+BASHUNIT_DEFAULT_PATH=tests/**/*_test.sh
+```
+:::
+
+## Output
+
+> `BASHUNIT_SIMPLE_OUTPUT=true|false`
+
+Enables simplified output to the console. `false` by default.
+
+Verbose is the default output, but it can be overridden by the environment configuration.
+
+Similar as using `-s|--simple | -vvv|--detailed` option on the [command line](/command-line#output).
+
+::: code-group
+```bash [Simple output]
+....
+```
+```bash [.env]
+BASHUNIT_SIMPLE_OUTPUT=true
+```
+:::
+
+::: code-group
+```[Verbose output]
+Running tests/functional/logic_test.sh
+✓ Passed: Other way of using the exit code
+✓ Passed: Should validate a non ok exit code
+✓ Passed: Should validate an ok exit code
+✓ Passed: Text should be equal
+```
+```bash [.env]
+BASHUNIT_SIMPLE_OUTPUT=false
+```
+:::
+
+## Parallel
+
+> `BASHUNIT_PARALLEL_RUN=true|false`
+
+Runs the tests in child processes with randomized execution, which may improve overall testing speed, especially for larger test suites.
+
+::: warning
+Parallel execution is supported only on **macOS** and **Ubuntu**. On other
+systems bashunit forces sequential execution to avoid inconsistent results.
+:::
+
+Similar as using `-p|--parallel` option on the [command line](/command-line#parallel).
+
+## Parallel Jobs
+
+> `BASHUNIT_PARALLEL_JOBS=<N>`
+
+Limits the number of concurrent jobs when running in parallel mode. Set to `0` (default) for unlimited concurrency.
+
+Similar as using `-j|--jobs` option on the [command line](/command-line#jobs).
+
+## Stop on failure
+
+> `BASHUNIT_STOP_ON_FAILURE=true|false`
+
+Force to stop the runner right after encountering one failing test. `false` by default.
+
+Similar as using `-S|--stop-on-failure` option on the [command line](/command-line#stop-on-failure).
+
+::: tip Assertion behavior
+By default, when an assertion fails within a test, subsequent assertions in the same test are skipped. Use `-R, --run-all` or set `BASHUNIT_STOP_ON_ASSERTION_FAILURE=false` to run all assertions even when one fails.
+
+The `--stop-on-failure` flag is separate – it stops the entire test runner after a failing **test**, while assertion-level stopping happens within each test.
+:::
+
+## Stop on assertion failure
+
+> `BASHUNIT_STOP_ON_ASSERTION_FAILURE=true|false`
+
+Controls whether to stop at the first failed assertion within a test. `true` by default.
+
+When enabled (default), subsequent assertions in the same test are skipped after a failure.
+When disabled, all assertions in the test run, showing all failures at once.
+
+Similar as using `-R|--run-all` option on the [command line](/command-line).
+
+::: code-group
+```bash [Run all assertions]
+BASHUNIT_STOP_ON_ASSERTION_FAILURE=false
+```
+```bash [Stop on first failure (default)]
+BASHUNIT_STOP_ON_ASSERTION_FAILURE=true
+```
+:::
+
+## Show header
+
+> `BASHUNIT_SHOW_HEADER=true|false`
+>
+> `BASHUNIT_HEADER_ASCII_ART=true|false`
+
+Specify if you want to show the bashunit header. `true` by default.
+
+Additionally, you can use the env-var `BASHUNIT_HEADER_ASCII_ART` to display bashunit in ASCII. `false` by default.
+
+::: code-group
+``` [Without header]
+✓ Passed: foo bar
+```
+```bash [.env]
+BASHUNIT_SHOW_HEADER=false
+```
+:::
+
+::: code-group
+```-vue [Plain header]
+bashunit - {{ pkg.version }} // [!code hl]
+
+✓ Passed: foo bar
+```
+```bash [.env]
+BASHUNIT_SHOW_HEADER=true
+```
+:::
+
+::: code-group
+```-vue [ASCII header]
+__               _                   _    // [!code hl]
+| |__   __ _ ___| |__  __ __ ____ (_) |_  // [!code hl]
+| '_ \ / _' / __| '_ \| | | | '_ \| | __| // [!code hl]
+| |_) | (_| \__ \ | | | |_| | | | | | |_  // [!code hl]
+|_.__/ \__,_|___/_| |_|\___/|_| |_|_|\__| // [!code hl]
+{{ pkg.version }} // [!code hl]
+
+✓ Passed: foo bar
+```
+```bash [.env]
+BASHUNIT_SHOW_HEADER=true
+BASHUNIT_HEADER_ASCII_ART=true
+```
+:::
+
+## Show execution time
+
+> `BASHUNIT_SHOW_EXECUTION_TIME=true|false`
+
+Specify if you want to display the execution time after running **bashunit**. `true` by default.
+
+The time format adapts based on duration:
+- Under 1 second: displayed in milliseconds (e.g., `14 ms`)
+- 1-59 seconds: displayed in seconds (e.g., `5 s`)
+- 60+ seconds: displayed in minutes and seconds (e.g., `2m 1s`)
+
+::: code-group
+```-vue [With execution time]
+✓ Passed: foo bar
+
+Tests:      1 passed, 1 total
+Assertions: 3 passed, 3 total
+All tests passed
+Time taken: 14 ms  // [!code hl]
+```
+```bash [.env]
+BASHUNIT_SHOW_EXECUTION_TIME=true
+```
+:::
+
+::: code-group
+```[Without execution time]
+✓ Passed: foo bar
+
+Tests:      1 passed, 1 total
+Assertions: 3 passed, 3 total
+All tests passed
+```
+```bash [.env]
+BASHUNIT_SHOW_EXECUTION_TIME=false
+```
+:::
+
+## Log JUnit
+
+> `BASHUNIT_LOG_JUNIT=file`
+
+Create a report XML file that follows the JUnit XML format and contains information about the test results of your bashunit tests.
+
+::: code-group
+```bash [Example]
+BASHUNIT_LOG_JUNIT=log-junit.xml
+```
+:::
+
+## Report HTML
+
+> `BASHUNIT_REPORT_HTML=file`
+
+Create a report HTML file that contains information about the test results of your bashunit tests.
+
+::: code-group
+```bash [Example]
+BASHUNIT_REPORT_HTML=report.html
+```
+:::
+
+## Bootstrap
+
+> `BASHUNIT_BOOTSTRAP=file`
+
+Specifies an additional file to be loaded for all tests cases.
+Useful to set up global variables or functions accessible in all your tests.
+
+::: tip Using functions in tests
+If you need shell functions available in your tests, define them in a bootstrap
+file and use `export -f function_name` to make them available in test subshells.
+This is the recommended pattern for sharing functions across tests.
+:::
+
+Similarly, you can use load an additional file via the [command line](/command-line#environment).
+
+::: code-group
+```bash [Example]
+# a simple .env file
+BASHUNIT_BOOTSTRAP=".env.tests"
+
+# or a complete script file
+BASHUNIT_BOOTSTRAP="tests/globals.sh"
+
+# Default value
+BASHUNIT_BOOTSTRAP="tests/bootstrap.sh"
+```
+:::
+
+### Bootstrap arguments
+
+> `BASHUNIT_BOOTSTRAP_ARGS=arguments`
+
+Pass arguments to the bootstrap file. Arguments are space-separated and available
+as positional parameters (`$1`, `$2`, etc.) in your bootstrap script.
+
+::: code-group
+```bash [.env]
+BASHUNIT_BOOTSTRAP="tests/bootstrap.sh"
+BASHUNIT_BOOTSTRAP_ARGS="staging verbose"
+```
+```bash [bootstrap.sh]
+#!/usr/bin/env bash
+ENVIRONMENT="${1:-production}"
+VERBOSE="${2:-false}"
+
+export API_URL="https://${ENVIRONMENT}.api.example.com"
+```
+:::
+
+You can also pass arguments inline via the [--env](/command-line#environment) option:
+
+```bash
+bashunit --env "tests/bootstrap.sh staging verbose" tests/
+```
+
+## Dev log
+
+> `BASHUNIT_DEV_LOG=file`
+
+> See: [Globals > log](/globals#log)
+
+::: code-group
+```bash [Setup]
+BASHUNIT_DEV_LOG="dev.log"
+```
+```bash [Usage]
+log "I am tracing something..."
+log "error" "an" "error" "message"
+log "warning" "different log level messages!"
+```
+```bash [Output: out.log]
+2024-10-03 21:27:23 [INFO]: I am tracing something... #tests/sample.sh:11
+2024-10-03 21:27:23 [ERROR]: an error message #tests/sample.sh:27
+2024-10-03 21:27:24 [WARNING]: different log level messages! #tests/sample.sh:21
+```
+:::
+When enabled, the selected log file path is printed in the header so you can
+quickly `tail -f` it while the tests run.
+
+> All internal messages emitted by bashunit are prefixed with `[INTERNAL]`.
+> You can toggle internal messages with `BASHUNIT_INTERNAL_LOG=true|false`.
+
+## Verbose
+
+> `BASHUNIT_VERBOSE=bool`
+
+Display internal details for each test.
+
+Similarly, you can use the command line option for this: [command line](/command-line#verbose).
+
+::: code-group
+```bash [Example]
+BASHUNIT_VERBOSE=true
+```
+:::
+
+## No output
+
+> `BASHUNIT_NO_OUTPUT=true|false`
+
+Suppress all console output. Defaults to `false`.
+
+Similar as using `--no-output` option on the [command line](/command-line#no-output).
+
+::: code-group
+```bash [Example]
+BASHUNIT_NO_OUTPUT=true
+```
+:::
+
+## Failures only
+
+> `BASHUNIT_FAILURES_ONLY=true|false`
+
+Only show failures, suppressing passed, skipped, and incomplete tests. `false` by default.
+
+When enabled, progress output is suppressed and only failing tests are displayed.
+The final summary still shows all counts (passed/failed/skipped/incomplete).
+
+Similar as using `--failures-only` option on the [command line](/command-line#failures-only).
+
+::: code-group
+```bash [Example]
+BASHUNIT_FAILURES_ONLY=true
+```
+:::
+
+## No progress
+
+> `BASHUNIT_NO_PROGRESS=true|false`
+
+Suppress real-time progress display during test execution. `false` by default.
+
+When enabled, bashunit hides per-test output, file headers, hook messages, and spinners,
+showing only the final summary. Useful for CI/CD pipelines or log-restricted environments.
+
+Similar as using `--no-progress` option on the [command line](/command-line#no-progress).
+
+::: code-group
+```bash [Example]
+BASHUNIT_NO_PROGRESS=true
+```
+:::
+
+## Show output on failure
+
+> `BASHUNIT_SHOW_OUTPUT_ON_FAILURE=true|false`
+
+Display captured stdout/stderr output when tests fail with runtime errors. `true` by default.
+
+When a test fails due to a runtime error (command not found, unbound variable, etc.),
+bashunit displays the test's output in an "Output:" section to help debug the failure.
+
+Similar as using `--show-output` or `--no-output-on-failure` options on the [command line](/command-line#show-output-on-failure).
+
+::: code-group
+```[Output example]
+✗ Error: My test function
+    command not found
+    Output:
+      Debug: Setting up test
+      Running command: my_command
+```
+```bash [.env to disable]
+BASHUNIT_SHOW_OUTPUT_ON_FAILURE=false
+```
+:::
+
+## Color output
+
+> `NO_COLOR=1`
+
+Disables ANSI color codes in output. Follows the [no-color.org](https://no-color.org) standard.
+
+When set to any value, bashunit will output plain text without color formatting.
+
+Similar as using `--no-color` option on the [command line](/command-line).
+
+::: code-group
+```bash [Example]
+NO_COLOR=1
+```
+:::
+
+## Strict mode
+
+> `BASHUNIT_STRICT_MODE=true|false`
+
+Enable strict shell mode (`set -euo pipefail`) for test execution. `false` by default.
+
+By default, tests run in permissive mode to maximize compatibility with
+different coding styles. Enable strict mode to catch potential issues like
+uninitialized variables and unchecked command failures.
+
+Similar as using `--strict` option on the [command line](/command-line#strict-mode).
+
+::: code-group
+```bash [Example]
+BASHUNIT_STRICT_MODE=true
+```
+:::
+
+## Skip env file
+
+> `BASHUNIT_SKIP_ENV_FILE=true|false`
+
+Skip loading the `.env` file and use the current shell environment only. `false` by default.
+
+By default, bashunit loads variables from `.env` which can override environment
+variables set in your shell. Enable this option when running in CI/CD pipelines
+or when you want shell environment variables to take precedence.
+
+::: warning Important
+Only environment variables are inherited from the parent shell. Shell functions
+and aliases are NOT available in tests due to bashunit's subshell architecture.
+Use a [bootstrap file](#bootstrap) to define functions needed by your tests.
+:::
+
+Similar as using `--skip-env-file` option on the [command line](/command-line#skip-env-file).
+
+::: code-group
+```bash [Example]
+BASHUNIT_SKIP_ENV_FILE=true ./bashunit tests/
+```
+:::
+
+## Login shell
+
+> `BASHUNIT_LOGIN_SHELL=true|false`
+
+Run tests in a login shell context by sourcing profile files. `false` by default.
+
+When enabled, bashunit sources the following files (if they exist) before each test:
+- `/etc/profile`
+- `~/.bash_profile`
+- `~/.bash_login`
+- `~/.profile`
+
+Use this when your tests depend on environment setup from login shell profiles.
+
+Similar as using `-l|--login` option on the [command line](/command-line#login-shell).
+
+::: code-group
+```bash [Example]
+BASHUNIT_LOGIN_SHELL=true
+```
+:::
+
+## Coverage
+
+### Enable coverage
+
+> `BASHUNIT_COVERAGE=true|false`
+
+Enable code coverage tracking. `false` by default.
+
+When enabled, bashunit tracks which lines of your source code are executed during tests
+and generates a coverage report.
+
+Similar as using `--coverage` option on the [command line](/command-line#coverage).
+
+::: code-group
+```bash [.env]
+BASHUNIT_COVERAGE=true
+```
+:::
+
+### Coverage paths
+
+> `BASHUNIT_COVERAGE_PATHS=paths`
+
+Comma-separated list of paths to track for coverage.
+
+By default, paths are auto-discovered from test file names (e.g., `tests/unit/assert_test.sh` discovers `src/assert.sh`).
+
+::: code-group
+```bash [.env]
+# Single path (explicit)
+BASHUNIT_COVERAGE_PATHS=src/
+
+# Multiple paths (explicit)
+BASHUNIT_COVERAGE_PATHS=src/,lib/,bin/
+```
+:::
+
+### Coverage exclude
+
+> `BASHUNIT_COVERAGE_EXCLUDE=patterns`
+
+Comma-separated list of patterns to exclude from coverage tracking.
+Default: `tests/*,vendor/*,*_test.sh,*Test.sh`
+
+::: code-group
+```bash [.env]
+BASHUNIT_COVERAGE_EXCLUDE=tests/*,vendor/*,*_test.sh,*_mock.sh
+```
+:::
+
+### Coverage report
+
+> `BASHUNIT_COVERAGE_REPORT=file`
+
+Path for the LCOV format coverage report. `coverage/lcov.info` by default.
+
+Set to empty string to disable file generation (console report only).
+
+::: code-group
+```bash [.env]
+# Custom path
+BASHUNIT_COVERAGE_REPORT=reports/coverage.lcov
+
+# Disable file output
+BASHUNIT_COVERAGE_REPORT=
+```
+:::
+
+### Coverage minimum
+
+> `BASHUNIT_COVERAGE_MIN=percent`
+
+Minimum coverage percentage required. Empty by default (no minimum).
+
+When set, bashunit will exit with a failure code if coverage falls below this threshold.
+
+::: code-group
+```bash [.env]
+BASHUNIT_COVERAGE_MIN=80
+```
+:::
+
+### Coverage thresholds
+
+> `BASHUNIT_COVERAGE_THRESHOLD_LOW=percent`
+>
+> `BASHUNIT_COVERAGE_THRESHOLD_HIGH=percent`
+
+Thresholds for color-coding the coverage output. Defaults: `50` and `80`.
+
+- Below `THRESHOLD_LOW`: Red
+- Between thresholds: Yellow
+- Above `THRESHOLD_HIGH`: Green
+
+::: code-group
+```bash [.env]
+BASHUNIT_COVERAGE_THRESHOLD_LOW=60
+BASHUNIT_COVERAGE_THRESHOLD_HIGH=90
+```
+:::
+
+<script setup>
+import pkg from '../package.json'
+</script>

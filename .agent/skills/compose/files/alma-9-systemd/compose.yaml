@@ -1,0 +1,23 @@
+# AlmaLinux 9 with systemd
+# Persistent compose session for testing and troubleshooting
+# Build from local Containerfile; systemd runs as PID 1
+
+services:
+  alma-systemd:
+    build:
+      context: .
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+      - SYS_TIME
+    security_opt:
+      - seccomp=unconfined
+    cgroup_mode: host
+    network_mode: slirp4netns
+    working_dir: "${COMPOSE_MOUNT:-/skill}"
+    volumes:
+      - "${MKS_ROOT}:${COMPOSE_MOUNT:-/skill}:rw"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run:rw,noexec,nosuid,size=64m
+      - "${COMPOSE_MOUNT:-/skill}/tmp:rw,noexec,nosuid,size=256m,mode=0700"

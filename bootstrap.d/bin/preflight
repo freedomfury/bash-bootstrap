@@ -1,0 +1,74 @@
+#!/usr/bin/env mks-bash
+# bootstrap.d/bin/preflight -- Gather facts, decrypt secrets, validate env
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  printf 'FATAL: MKS_ROOT is not set — run via make or source exports first\n' >&2
+  exit 3
+}
+
+readonly _SELF="${0##*/}"
+
+# shellcheck source=bootstrap.d/lib/defaults.sh
+source "${MKS_ROOT}/bootstrap.d/lib/defaults.sh"
+
+# BSS_TMP is defined in bootstrap.d/exports, sourced transitively via defaults.sh
+# shellcheck disable=SC2154
+
+# -- Gather OS facts
+_gather_os_facts() {
+  lib::std::logger -l info -m "${_SELF}: gathering OS facts"
+  mkdir -p "${BSS_TMP}/facts"
+  "${MKS_ROOT}/bin/facts-global-os" \
+    --prefix BSS_OS_FACTS \
+    --output "${BSS_TMP}/facts/facts-global-os.env"
+  lib::std::logger -l info -m "${_SELF}: OS facts written to ${BSS_TMP}/facts/facts-global-os.env"
+}
+
+# -- Dump installed packages
+_dump_packages() {
+  lib::std::logger -l info -m "${_SELF}: dumping installed packages"
+  mkdir -p "${BSS_TMP}/facts"
+  if command -v dpkg-query &>/dev/null; then
+    dpkg-query --show --showformat='${Package} ${Version}\n' \
+      > "${BSS_TMP}/facts/packages.list"
+  elif command -v rpm &>/dev/null; then
+    rpm -qa --queryformat '%{NAME} %{VERSION}\n' \
+      > "${BSS_TMP}/facts/packages.list"
+  else
+    lib::std::logger -l warn -m "${_SELF}: no known package manager found — skipping packages.list"
+    return 0
+  fi
+  lib::std::logger -l info -m "${_SELF}: packages written to ${BSS_TMP}/facts/packages.list"
+}
+
+# -- Decrypt secrets into memory
+_decrypt_secrets() {
+  local _secrets_file="${BSS_ROOT}/vars/secrets.env.sec.age"
+  if [[ ! -f "${_secrets_file}" ]]; then
+    lib::std::logger -l warn -m "${_SELF}: no secrets file found — skipping"
+    return 0
+  fi
+  lib::std::logger -l info -m "${_SELF}: decrypting secrets"
+  : "${MKS_AGE_PKEY:=${MKS_TMP}/age/id_rsa}"
+  local _decrypted
+  _decrypted="$(age --decrypt --identity "${MKS_AGE_PKEY}" "${_secrets_file}")"
+  # shellcheck source=/dev/null
+  source <(printf '%s\n' "${_decrypted}")
+  lib::std::logger -l info -m "${_SELF}: secrets loaded into environment"
+}
+
+main() {
+  lib::std::logger -l info -m "${_SELF}: preflight starting"
+  _gather_os_facts
+  _dump_packages
+  _decrypt_secrets
+  lib::std::logger -l info -m "${_SELF}: preflight complete"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

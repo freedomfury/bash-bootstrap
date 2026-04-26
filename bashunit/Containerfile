@@ -1,0 +1,41 @@
+FROM node:20-slim AS builder
+
+# Install git and cleanup apt cache
+RUN apt-get update && \
+    apt-get install -y git && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Clone bashunit repository
+RUN git clone https://github.com/TypedDevs/bashunit.git repo
+
+# Copy documentation markdown files to output directory
+RUN mkdir -p /output && \
+    cp repo/docs/*.md /output/ 2>/dev/null || true && \
+    cp repo/*.md /output/ 2>/dev/null || true && \
+    cp repo/CHANGELOG.md /output/ 2>/dev/null || true
+
+# Generate README.md index using a heredoc script
+RUN cd /output && cat > gen_readme.sh << 'GENSCRIPT' && \
+    chmod +x gen_readme.sh && ./gen_readme.sh && rm gen_readme.sh
+#!/bin/sh
+echo "# Bashunit Documentation" > README.md
+echo "" >> README.md
+echo "Extracted from https://github.com/TypedDevs/bashunit" >> README.md
+echo "" >> README.md
+echo "## Documentation Index" >> README.md
+echo "" >> README.md
+for file in *.md; do
+    if [ "$file" != "README.md" ]; then
+        title=$(head -n 1 "$file" | sed 's/^#*[[:space:]]*//')
+        echo "- [$title]($file)" >> README.md
+    fi
+done
+GENSCRIPT
+
+# Final stage uses scratch, but we need a base for bind mount visibility
+# Using the builder image directly with bind mount
+FROM node:20-slim
+WORKDIR /output
+COPY --from=builder /output /output

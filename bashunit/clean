@@ -1,0 +1,15 @@
+#!/bin/sh
+# bashunit/clean -- Remove extracted documentation.
+# Can be run from the root as ./bashunit/clean or from inside the bashunit directory.
+
+set -eu
+
+_BIN_DIR="$(dirname "$0")"
+cd "$_BIN_DIR" || exit 1
+
+printf '==- bashunit/clean: removing documentation... -==\n'
+
+# -- Delete all extracted documentation
+rm -rf output/
+
+printf '==- bashunit/clean: complete. -==\n'

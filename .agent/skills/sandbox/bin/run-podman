@@ -1,0 +1,229 @@
+#!/usr/bin/env mks-bash
+# .agent/skills/sandbox/bin/run-podman -- run a command in a sandboxed Podman container
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  lib::std::logger -l error -m "MKS_ROOT is not set — run via make or source exports first"
+  exit 3
+}
+
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+# Usage:
+#   run [options] [--] [<command> [<arg>...]]
+#
+# Runs <command> inside a rootless, capability-stripped Podman container that
+# bind-mounts the project root at /skill. The container image is auto-detected
+# from the host OS (/etc/os-release or /etc/host-os-release). If no command
+# is given, drops into an interactive /bin/bash shell.
+#
+# Options:
+#   -m, --mutable          Mount /skill read-write (default: immutable/read-only)
+#   -n, --network  <mode>  Network mode: slirp4netns | host (default: none)
+#   -v, --verbose          Print the full podman command before executing
+#   -h, --help             Show this help and exit
+#
+# Returns:
+#   0  success
+#   1  usage error
+#   3  environment error (MKS_ROOT not set, podman not found)
+#   *  container exit code (propagated via exec)
+# --
+
+readonly _SELF="${0##*/}"
+readonly _SKILL_BIN="${BASH_SOURCE[0]%/*}"
+
+# Set up cleanup trap at script scope for the exports fixture directory.
+# This runs after main() returns and cleans up any leftover temp files.
+_trap_cleanup_exports() {
+  if [[ -n "${MKS_ROOT:-}" ]]; then
+    rm -f "${MKS_ROOT}/tmp/skills"/exports.* 2>/dev/null || true
+    rm -f "${MKS_ROOT}/tmp/skills"/wrapper.* 2>/dev/null || true
+  fi
+}
+trap _trap_cleanup_exports EXIT
+
+# _require_podman -- fail fast if podman is not on PATH
+# INTERNAL: positional-only, called once
+_require_podman() {
+  command -v podman > /dev/null 2>&1 || {
+    lib::std::logger -l error -m "podman not found on PATH. Install: apt-get install podman (Debian/Ubuntu) or dnf install podman (Fedora)"
+    exit 3
+  }
+}
+
+# _detect_image -- delegate to sibling detect-image binary
+# INTERNAL: positional-only, writes result into nameref $1
+_detect_image() {
+  local -n _fn_result="$1"
+  _fn_result="$("${_SKILL_BIN}/detect-image")"
+}
+
+# usage -- print usage message, then exit 1
+usage() {
+  cat <<'EOF'
+Usage: run [options] [--] [<command> [<arg>...]]
+
+Runs <command> inside a rootless, capability-stripped Podman container that
+bind-mounts the project root at /skill. The container image is auto-detected
+from the host OS. If no command is given, drops into an interactive /bin/bash
+shell.
+
+Options:
+  -m, --mutable          Mount /skill read-write (default: immutable/read-only)
+  -n, --network  <mode>  Network mode: slirp4netns | host (default: none)
+  -v, --verbose          Print the full podman command before executing
+  -h, --help             Show this help and exit
+
+Returns:
+  0  success
+  1  usage error
+  3  environment error (MKS_ROOT not set, podman not found)
+  *  container exit code (propagated via exec)
+EOF
+  exit 1
+}
+
+main() {
+  _require_podman
+
+  local -A opts=(
+    [mutable]=0
+    [network]=""
+    [verbose]=0
+  )
+  local -a cmd=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m | --mutable)
+        opts[mutable]=1
+        shift
+        ;;
+      -n | --network)
+        case "$2" in
+          slirp4netns | host) opts[network]="$2" ;;
+          *)
+            lib::std::logger -l error -m "invalid --network value: $2 (accepted: slirp4netns, host)"
+            return 1
+            ;;
+        esac
+        shift 2
+        ;;
+      -v | --verbose)
+        opts[verbose]=1
+        shift
+        ;;
+      -h | --help)
+        usage
+        ;;
+      --)
+        shift
+        cmd=("$@")
+        break
+        ;;
+      --* | -*)
+        lib::std::logger -l error -m "unknown option: $1"
+        return 1
+        ;;
+      *)
+        cmd=("$@")
+        break
+        ;;
+    esac
+  done
+
+  _require_podman
+
+  # Always auto-detect image from host OS — one-shot containers are OS-matched only
+  local image
+  _detect_image image
+
+  # Default command: drop into an interactive shell
+  if (( ${#cmd[@]} == 0 )); then
+    cmd=(/bin/bash)
+  fi
+
+  # Bind mount mode — immutable by default, read-write when --mutable is passed
+  local mount_mode="ro"
+  (( opts[mutable] )) && mount_mode="rw"
+
+  # Generate a container-specific exports fixture and entrypoint wrapper.
+  # The exports file is sed'd to replace host MKS_ROOT with /skill.
+  # The wrapper sources exports and then execs the user's command.
+  # Temp files live in MKS_TMP/skills/; cleanup is handled by the EXIT trap.
+  local _skills_tmp="${MKS_TMP}/skills"
+  mkdir -p "${_skills_tmp}"
+
+  local _exports_fixture
+  _exports_fixture="$(mktemp -p "${_skills_tmp}" exports.XXXXXXXX)" || {
+    lib::std::logger -l error -m "mktemp failed"
+    return 1
+  }
+  sed "s|${MKS_ROOT}|/skill|g" "${MKS_ROOT}/exports" > "${_exports_fixture}"
+
+  local _entrypoint_wrapper
+  _entrypoint_wrapper="$(mktemp -p "${_skills_tmp}" wrapper.XXXXXXXX)" || {
+    lib::std::logger -l error -m "mktemp failed"
+    return 1
+  }
+  chmod +x "${_entrypoint_wrapper}"
+  cat > "${_entrypoint_wrapper}" <<'WRAPPER_EOF'
+#!/bin/bash
+# Entrypoint wrapper: source exports, then exec the command
+source /skill/exports || exit 3
+exec "$@"
+WRAPPER_EOF
+
+  # Network mode
+  local network_flag="--network=none"
+  [[ -n "${opts[network]}" ]] && network_flag="--network=${opts[network]}"
+
+  # Add -t (pseudo-TTY) only when stdin is a terminal; always pass -i so
+  # piped invocations work (e.g. echo foo | bin/run -- cat)
+  local -a tty_flags=(-i)
+  [[ -t 0 ]] && tty_flags+=(-t)
+
+  # Build the full podman command as an array — never concatenate into a
+  # string; MKS_ROOT may contain spaces.
+  local -a podman_cmd=(
+    podman run
+    --rm
+    --userns=keep-id
+    --security-opt=no-new-privileges
+    --cap-drop=ALL
+    "${network_flag}"
+    --read-only
+    '--tmpfs' '/tmp:rw,noexec,nosuid,size=64m'
+    '--tmpfs' '/run:rw,noexec,nosuid,size=16m'
+    '--tmpfs' '/skill/tmp:rw,noexec,nosuid,size=256m,mode=0700,U'
+    '--volume' "${MKS_ROOT}:/skill:${mount_mode}"
+    '--volume' "${_exports_fixture}:/skill/exports:ro"
+    '--volume' "${_entrypoint_wrapper}:/entrypoint/wrapper.sh:ro"
+    --entrypoint /entrypoint/wrapper.sh
+    --workdir /skill
+    --pull=missing
+  )
+  podman_cmd+=(
+    "${tty_flags[@]}"
+    "${image}"
+    "${cmd[@]}"
+  )
+
+  if (( opts[verbose] )); then
+    printf '%s: executing:\n' "${_SELF}" >&2
+    printf '  %q\n' "${podman_cmd[@]}" >&2
+  fi
+
+  # Run podman; exit code propagates on return. The EXIT trap cleans up the
+  # exports fixture when this shell exits.
+  "${podman_cmd[@]}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

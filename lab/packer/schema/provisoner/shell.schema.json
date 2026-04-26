@@ -1,0 +1,133 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Packer Shell Provisioner",
+    "type": "object",
+    "properties": {
+        "type": {
+            "const": "shell"
+        },
+        "inline": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "An array of commands to execute. Commands are concatenated and executed within the same context."
+        },
+        "script": {
+            "type": "string",
+            "description": "The path to a script to upload and execute in the machine."
+        },
+        "scripts": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "An array of scripts to execute in the order specified. Each script is executed in isolation."
+        },
+        "binary": {
+            "type": "boolean",
+            "description": "If true, specifies that the script(s) are binary files; prevents conversion of Windows line endings to Unix."
+        },
+        "valid_exit_codes": {
+            "type": "array",
+            "items": {
+                "type": "integer"
+            },
+            "description": "Valid exit codes for the script. Defaults to [0]."
+        },
+        "env": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "string"
+            },
+            "description": "A map of key/value pairs to inject prior to the execute_command."
+        },
+        "environment_vars": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "An array of key/value pairs (key=value) to inject prior to the execute_command."
+        },
+        "env_var_format": {
+            "type": "string",
+            "description": "A string template used to ensure environment vars are set correctly. Default is \"%s='%s' \"."
+        },
+        "use_env_var_file": {
+            "type": "boolean",
+            "description": "If true, Packer writes environment variables to a tempfile and sources them instead of declaring them inline."
+        },
+        "execute_command": {
+            "type": "string",
+            "description": "The command template used to execute the script. Supports user variables and template functions."
+        },
+        "expect_disconnect": {
+            "type": "boolean",
+            "description": "If true, allows the server to disconnect (like a reboot) without throwing an error."
+        },
+        "inline_shebang": {
+            "type": "string",
+            "description": "The shebang value used when running commands specified by inline. Default is /bin/sh -e."
+        },
+        "remote_folder": {
+            "type": "string",
+            "description": "The folder where the uploaded script will reside on the machine. Defaults to /tmp."
+        },
+        "remote_file": {
+            "type": "string",
+            "description": "The filename the uploaded script will have on the machine. Defaults to script_nnn.sh."
+        },
+        "remote_path": {
+            "type": "string",
+            "description": "The full path to the uploaded script; overrides both remote_folder and remote_file."
+        },
+        "skip_clean": {
+            "type": "boolean",
+            "description": "If true, helper scripts uploaded to the system will not be removed by Packer after execution."
+        },
+        "start_retry_timeout": {
+            "type": "string",
+            "description": "The amount of time to attempt to start the remote process (e.g., waiting for SSH after a reboot). Default 5m."
+        },
+        "pause_after": {
+            "type": "string",
+            "description": "Duration to wait after the provisioner finishes, provided all steps were successful."
+        },
+        "pause_before": {
+            "type": "string",
+            "description": "Duration to sleep before starting the provisioner execution."
+        },
+        "max_retries": {
+            "type": "integer",
+            "description": "Max times the provisioner will retry on failure. Defaults to 0."
+        },
+        "only": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Only run this provisioner for the listed builder(s) by name."
+        },
+        "timeout": {
+            "type": "string",
+            "description": "Maximum time allowed for the provisioner to finish before failing."
+        }
+    },
+    "oneOf": [
+        {
+            "required": [
+                "inline"
+            ]
+        },
+        {
+            "required": [
+                "script"
+            ]
+        },
+        {
+            "required": [
+                "scripts"
+            ]
+        }
+    ]
+}

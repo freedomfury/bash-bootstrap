@@ -1,0 +1,8 @@
+[syntax]
+block-start = "<%"
+block-end = "%>"
+variable-start = "<%="
+variable-end = "%>"
+comment-start = "<%#"
+comment-end = "%>"
+

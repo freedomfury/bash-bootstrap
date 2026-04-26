@@ -1,0 +1,19 @@
+#!/bin/sh
+# mks-vendor -- Vendor environment bootstrap for the monolithic project.
+# Ensures the statically-compiled toolkit is built and available.
+# Run this manually if vendor.lock is missing or corrupted.
+
+set -eu
+
+cd "$(dirname "$0")" || exit 1
+
+# Check if toolkit is already built
+if [ -f "vendor.lock" ]; then
+    printf '==- mks-vendor: toolkit already built (vendor.lock exists) -==\n'
+    exit 0
+fi
+
+# Vendor lock missing — clean and rebuild
+printf '==- mks-vendor: vendor.lock missing, cleaning and rebuilding toolkit... -==\n'
+./vendor/clean
+./vendor/build

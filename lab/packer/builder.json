@@ -1,0 +1,37 @@
+{
+    "build": {
+        "name": "my-custom-build",
+        "sources": [
+            {
+                "image_name": "almalinux-97",
+                "source_name": "alma-shell-1"
+            },
+            {
+                "image_name": "almalinux-810",
+                "source_name": "alma-shell-2"
+            }
+        ],
+        "provisioners": [
+            {
+                "type": "shell",
+                "name": "install-ntp",
+                "inline_shebang": "/bin/sh",
+                "inline": [
+                    "sudo dnf install -y chrony",
+                    "sudo systemctl enable --now chronyd"
+                ],
+                "timeout": "10m"
+            },
+            {
+                "type": "shell",
+                "name": "validate-ntp",
+                "inline": [
+                    "systemctl is-active chronyd"
+                ],
+                "valid_exit_codes": [
+                    0
+                ]
+            }
+        ]
+    }
+}

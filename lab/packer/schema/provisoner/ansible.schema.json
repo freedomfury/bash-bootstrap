@@ -1,0 +1,163 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Packer Ansible Provisioner",
+    "type": "object",
+    "properties": {
+        "type": {
+            "const": "ansible"
+        },
+        "playbook_file": {
+            "type": "string",
+            "description": "The playbook to be run by Ansible."
+        },
+        "command": {
+            "type": "string",
+            "description": "The command to invoke ansible. Defaults to ansible-playbook."
+        },
+        "extra_arguments": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Extra arguments to pass to Ansible. Not passed through a shell; do not quote."
+        },
+        "ansible_env_vars": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Environment variables to set before running Ansible (e.g. ANSIBLE_HOST_KEY_CHECKING=False)."
+        },
+        "user": {
+            "type": "string",
+            "description": "The ansible_user to use. Defaults to the user running packer."
+        },
+        "groups": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "The groups into which the Ansible host should be placed."
+        },
+        "empty_groups": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "The groups which should be present in inventory file but remain empty."
+        },
+        "host_alias": {
+            "type": "string",
+            "description": "The alias by which the Ansible host should be known. Defaults to 'default'."
+        },
+        "local_port": {
+            "type": "integer",
+            "description": "The port on which to attempt to listen for SSH connections (tries first available of 10)."
+        },
+        "ssh_host_key_file": {
+            "type": "string",
+            "description": "The SSH key used to run the SSH server on the host machine to forward commands."
+        },
+        "ssh_authorized_key_file": {
+            "type": "string",
+            "description": "The SSH public key of the Ansible ssh_user. Defaults to a onetime generated key."
+        },
+        "ansible_ssh_extra_args": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Specifies --ssh-extra-args on command line; defaults to -o IdentitiesOnly=yes."
+        },
+        "inventory_file_template": {
+            "type": "string",
+            "description": "Template for the format of lines added to the temporary inventory file Packer creates."
+        },
+        "inventory_directory": {
+            "type": "string",
+            "description": "The directory in which to place the temporary generated Ansible inventory file."
+        },
+        "inventory_file": {
+            "type": "string",
+            "description": "The inventory file to use during provisioning instead of a temporary one."
+        },
+        "keep_inventory_file": {
+            "type": "boolean",
+            "description": "If true, the Ansible provisioner will not delete the temporary inventory file it creates."
+        },
+        "ansible_proxy_key_type": {
+            "type": "string",
+            "enum": [
+                "ECDSA",
+                "RSA"
+            ],
+            "description": "Change the key type used for the adapter. Defaults to ECDSA."
+        },
+        "sftp_command": {
+            "type": "string",
+            "description": "The command to run on the machine to handle the SFTP protocol. Defaults to /usr/lib/sftp-server -e."
+        },
+        "use_sftp": {
+            "type": "boolean",
+            "description": "Whether to use SFTP for file transfers."
+        },
+        "galaxy_file": {
+            "type": "string",
+            "description": "A requirements file to install roles or collections before execution."
+        },
+        "galaxy_command": {
+            "type": "string",
+            "description": "The command to invoke ansible-galaxy. Defaults to ansible-galaxy."
+        },
+        "galaxy_force_install": {
+            "type": "boolean",
+            "description": "Adds --force option to ansible-galaxy command."
+        },
+        "galaxy_force_with_deps": {
+            "type": "boolean",
+            "description": "Adds --force-with-deps option to ansible-galaxy command."
+        },
+        "roles_path": {
+            "type": "string",
+            "description": "The path to the local directory in which to install Ansible roles."
+        },
+        "collections_path": {
+            "type": "string",
+            "description": "The path to the local directory in which to install Ansible collections."
+        },
+        "use_proxy": {
+            "type": "boolean",
+            "description": "Set up a localhost proxy adapter for Ansible. Defaults to true."
+        },
+        "skip_version_check": {
+            "type": "boolean",
+            "description": "If true, skip checking whether ansible is installed prior to running."
+        },
+        "ansible_winrm_use_http": {
+            "type": "boolean",
+            "description": "Force WinRM to use HTTP instead of HTTPS. Default: false."
+        },
+        "pause_before": {
+            "type": "string",
+            "description": "Sleep for duration before execution."
+        },
+        "timeout": {
+            "type": "string",
+            "description": "Maximum time allowed for the provisioner to finish."
+        },
+        "max_retries": {
+            "type": "integer",
+            "description": "Max times the provisioner will retry on failure. Defaults to 0."
+        },
+        "only": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Only run this provisioner for the listed builder(s) by name."
+        }
+    },
+    "required": [
+        "playbook_file"
+    ]
+}

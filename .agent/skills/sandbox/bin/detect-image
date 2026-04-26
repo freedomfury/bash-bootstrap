@@ -1,0 +1,99 @@
+#!/usr/bin/env mks-bash
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  lib::std::logger -l error -m "MKS_ROOT is not set!"
+  exit 3
+}
+
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+# .agent/skills/sandbox/bin/detect-image -- detect OCI image matching host OS
+#
+# Usage:
+#   detect-image
+#
+# Options:
+#   --help     Show this help and exit
+#
+# Returns:
+#   0  success — image reference printed to stdout
+#   3  environment error (Podman not found, OS not supported)
+# ---------------------------------------------------------------------------
+
+readonly _SELF="${0##*/}"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  exit "${exit_code}"
+}
+
+_on_error() {
+  lib::std::logger -l error -m "${BASH_SOURCE[0]} failed at line $1 (exit $?)"
+}
+
+trap '_cleanup'              EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# -- usage: print usage block and exit 1
+usage() {
+  sed -n '2,/^[^#]/p' "${BASH_SOURCE[0]}" | sed -n 's/^# \{0,1\}//p'
+  exit 1
+}
+
+# -- main: detect OCI image matching host OS
+main() {
+  # Check for help flag
+  if [[ $# -gt 0 && "$1" == "--help" ]]; then
+    usage
+  fi
+
+  # _require_podman -- fail fast if podman is not on PATH
+  _require_podman() {
+    command -v podman > /dev/null 2>&1 || {
+      lib::std::logger -l error -m "podman not found on PATH. Install: apt-get install podman (Debian/Ubuntu)"
+      exit 3
+    }
+  }
+
+  _require_podman
+
+  # Resolve OS release file — only /etc/os-release is consulted.
+  local os_release_file="/etc/os-release"
+  if [[ ! -f "${os_release_file}" ]]; then
+    lib::std::logger -l error -m "${os_release_file} not found; cannot determine host OS image"
+    exit 3
+  fi
+
+  # Source os-release in a subshell to extract ID and VERSION_ID without
+  # leaking bare uppercase names (ID, NAME, VERSION, etc.) into the current
+  # shell's scope — this is the explicit isolation case from bash-conv.md §5.11.
+  local os_id os_version_id
+  # shellcheck source=/dev/null
+  os_id="$(. "${os_release_file}"; printf '%s' "${ID:-}")"
+  # shellcheck source=/dev/null
+  os_version_id="$(. "${os_release_file}"; printf '%s' "${VERSION_ID:-}")"
+
+  local image
+  case "${os_id,,}" in
+    ubuntu)   image="docker.io/library/ubuntu:${os_version_id}" ;;
+    debian)   image="docker.io/library/debian:${os_version_id}" ;;
+    alma|rocky|centos)
+              image="docker.io/library/${os_id}:${os_version_id}" ;;
+    *)
+      lib::std::logger -l error -m "unknown OS ID \"${os_id}\"; cannot determine host OS image"
+      exit 3
+      ;;
+  esac
+
+  printf '%s\n' "${image}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

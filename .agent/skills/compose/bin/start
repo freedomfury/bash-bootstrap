@@ -1,0 +1,242 @@
+#!/usr/bin/env mks-bash
+# .agent/skills/compose/bin/start -- start a Podman Compose session
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  lib::std::logger -l error -m "MKS_ROOT is not set — run via make or source exports first"
+  exit 3
+}
+
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+# Usage:
+#   start [options]
+#
+# Starts a Podman Compose session in detached mode. The compose file must
+# exist in files/ or be provided as an absolute path. The project name is
+# derived from the compose file basename unless --name is provided.
+#
+# Options:
+#   -c, --compose <file>   Compose file (relative to files/ or absolute)
+#   -n, --name <name>      Project name (default: derived from compose file)
+#   -m, --mount <path>     Mount point inside the container (default: /skill)
+#   -h, --help             Show this help and exit
+#
+# Returns:
+#   0  success
+#   1  usage error
+#   3  environment error (MKS_ROOT not set, podman-compose not found)
+# --
+
+readonly _SELF="${0##*/}"
+readonly _SKILL_ROOT="${BASH_SOURCE[0]%/*/*}"
+readonly _COMPOSE_FILES_DIR="${_SKILL_ROOT}/files"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  # Clean up temp files or release locks here
+  exit "${exit_code}"
+}
+
+_on_error() {
+  lib::std::logger -l error -m "${BASH_SOURCE[0]} failed at line $1 (exit $?)"
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# usage -- print usage message, then exit 1
+usage() {
+  cat <<'EOF'
+Usage: start [options]
+
+Starts a Podman Compose session in detached mode. The compose file must
+exist in files/ or be provided as an absolute path.
+
+Options:
+  -c, --compose <file>   Compose file (relative to files/ or absolute)
+  -n, --name <name>      Project name (default: derived from compose file)
+  -m, --mount <path>     Mount point inside the container (default: /skill)
+  -h, --help             Show this help and exit
+
+Returns:
+  0  success
+  1  usage error
+  3  environment error (MKS_ROOT not set, podman-compose not found)
+EOF
+  exit 1
+}
+
+# _require_podman_compose -- fail fast if podman-compose is not on PATH
+# INTERNAL: positional-only, called once
+_require_podman_compose() {
+  command -v podman-compose > /dev/null 2>&1 || {
+    lib::std::logger -l error -m "podman-compose not found on PATH. Install: pip install podman-compose"
+    exit 3
+  }
+}
+
+# _derive_project_name -- extracts project name from compose file directory
+# INTERNAL: reads $1, writes result into nameref $2
+# Example: .../ubuntu-25.10-systemd/compose.yaml -> ubuntu-25.10-systemd
+_derive_project_name() {
+  local compose_file="$1"
+  local -n result="$2"
+  local dir_name
+  dir_name="$(dirname "${compose_file}")"
+  dir_name="${dir_name##*/}"
+  result="${dir_name}"
+}
+
+# _resolve_compose_file -- resolves compose file path (relative to files/, cwd, or absolute)
+# INTERNAL: reads $1 (raw input), writes result into nameref $2, returns 1 if not found
+_resolve_compose_file() {
+  local input="$1"
+  local -n result="$2"
+  local candidate
+
+  if [[ "${input}" == /* ]]; then
+    # Absolute path
+    candidate="${input}"
+  elif [[ -f "${MKS_ROOT}/${input}" ]]; then
+    # Relative to project root (MKS_ROOT)
+    candidate="${MKS_ROOT}/${input}"
+  elif [[ -f "${_COMPOSE_FILES_DIR}/${input}" ]]; then
+    # Relative to compose files directory
+    candidate="${_COMPOSE_FILES_DIR}/${input}"
+  elif [[ -f "${input}" ]]; then
+    # Relative to current working directory
+    candidate="${input}"
+  else
+    lib::std::logger -l error -m "compose file not found: ${input}"
+    return 1
+  fi
+
+  # Convert to absolute path for podman-compose
+  if [[ "${candidate}" != /* ]]; then
+    candidate="$(cd "$(dirname "${candidate}")" && pwd)/$(basename "${candidate}")"
+  fi
+
+  if [[ ! -f "${candidate}" ]]; then
+    lib::std::logger -l error -m "compose file not found: ${candidate}"
+    return 1
+  fi
+
+  result="${candidate}"
+}
+
+main() {
+  _require_podman_compose
+
+  local compose_file=""
+  local project_name=""
+  local mount_path=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m | --mount)
+        if [[ -z "${2:-}" ]] || [[ "${2}" == -* ]]; then
+          lib::std::logger -l error -m "--mount requires a path argument"
+          return 1
+        fi
+        mount_path="$2"
+        shift 2
+        ;;
+      -c | --compose)
+        if [[ -z "${2:-}" ]] || [[ "${2}" == -* ]]; then
+          lib::std::logger -l error -m "--compose requires a file argument"
+          return 1
+        fi
+        compose_file="$2"
+        shift 2
+        ;;
+      -n | --name)
+        if [[ -z "${2:-}" ]] || [[ "${2}" == -* ]]; then
+          lib::std::logger -l error -m "--name requires a name argument"
+          return 1
+        fi
+        project_name="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        lib::std::logger -l error -m "unknown option: $1"
+        return 1
+        ;;
+      *)
+        lib::std::logger -l error -m "unexpected argument: $1"
+        return 1
+        ;;
+    esac
+  done
+
+  # Validate compose file was provided
+  if [[ -z "${compose_file}" ]]; then
+    lib::std::logger -l error -m "--compose is required"
+    return 1
+  fi
+
+  # Resolve compose file path
+  local resolved_compose_file
+  if ! _resolve_compose_file "${compose_file}" resolved_compose_file; then
+    return 1
+  fi
+
+  # Derive project name if not provided
+  if [[ -z "${project_name}" ]]; then
+    _derive_project_name "${resolved_compose_file}" project_name
+  fi
+
+  # Export mount point for compose file variable substitution
+  if [[ -n "${mount_path}" ]]; then
+    export COMPOSE_MOUNT="${mount_path}"
+  fi
+
+  # Build podman-compose command
+  local -a compose_cmd=(
+    podman-compose
+    --project-name "${project_name}"
+    -f "${resolved_compose_file}"
+    up
+    -d
+  )
+
+  # Run podman-compose
+  lib::std::logger -l info -m "starting session \"${project_name}\"..."
+  "${compose_cmd[@]}"
+
+  # Get container info
+  local container_id
+  container_id="$(podman ps --filter "label=com.docker.compose.project=${project_name}" --format "{{.ID}}")" || {
+    lib::std::logger -l warn -m "could not retrieve container ID"
+  }
+
+  printf '\n'
+  printf 'Session started:\n'
+  printf '  Project name: %s\n' "${project_name}"
+  printf '  Compose file: %s\n' "${resolved_compose_file}"
+  if [[ -n "${container_id}" ]]; then
+    printf '  Container ID: %s\n' "${container_id}"
+  fi
+  printf '\n'
+  printf 'Run commands in this session:\n'
+  printf '  %s/bin/exec --name %s -- <command>\n' "${_SKILL_ROOT}" "${project_name}"
+  printf '\n'
+  printf 'Stop the session:\n'
+  printf '  %s/bin/stop --name %s\n' "${_SKILL_ROOT}" "${project_name}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

@@ -1,0 +1,177 @@
+#!/usr/bin/env mks-bash
+# .agent/skills/compose/bin/exec -- run a command in an active Compose session
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  lib::std::logger -l error -m "MKS_ROOT is not set — run via make or source exports first"
+  exit 3
+}
+
+# shellcheck source=lib/std/logger.sh
+source "${MKS_ROOT}/lib/std/logger.sh"
+
+# Usage:
+#   exec [options] [--] [<command> [<arg>...]]
+#
+# Executes a command inside a running Podman Compose session. If no command
+# is provided, drops into an interactive /bin/bash shell.
+#
+# Options:
+#   -n, --name <project>   Project name (required)
+#   -h, --help             Show this help and exit
+#
+# Returns:
+#   0  success
+#   1  usage error
+#   3  environment error (MKS_ROOT not set, podman-compose not found)
+#   *  container exit code (propagated)
+# --
+
+readonly _SELF="${0##*/}"
+readonly _SKILL_ROOT="${BASH_SOURCE[0]%/*/*}"
+
+# -- Trap handlers
+_cleanup() {
+  local exit_code=$?
+  # Clean up temp files or release locks here
+  exit "${exit_code}"
+}
+
+_on_error() {
+  lib::std::logger -l error -m "${BASH_SOURCE[0]} failed at line $1 (exit $?)"
+}
+
+trap '_cleanup' EXIT
+trap '_on_error "${LINENO}"' ERR
+
+# usage -- print usage message, then exit 1
+usage() {
+  cat <<'EOF'
+Usage: exec [options] [--] [<command> [<arg>...]]
+
+Executes a command inside a running Podman Compose session. If no command
+is provided, drops into an interactive /bin/bash shell.
+
+Options:
+  -n, --name <project>   Project name (required)
+  -h, --help             Show this help and exit
+
+Returns:
+  0  success
+  1  usage error
+  3  environment error (MKS_ROOT not set, podman-compose not found)
+  *  container exit code (propagated)
+EOF
+  exit 1
+}
+
+# _require_podman_compose -- fail fast if podman-compose is not on PATH
+# INTERNAL: positional-only, called once
+_require_podman_compose() {
+  command -v podman-compose > /dev/null 2>&1 || {
+    lib::std::logger -l error -m "podman-compose not found on PATH. Install: pip install podman-compose"
+    exit 3
+  }
+}
+
+# _session_exists -- check if a compose session is running
+# INTERNAL: reads $1 (project name), returns 0 if running, 1 otherwise
+_session_exists() {
+  local project_name="$1"
+  local output
+  # Use podman ps with compose project label filter
+  output="$(podman ps --filter "label=com.docker.compose.project=${project_name}" --format '{{.Names}}' 2>/dev/null)"
+  [[ -n "${output}" ]]
+}
+
+# _get_service_name -- extracts the service name from the compose file
+# INTERNAL: reads $1 (compose file path), writes result into nameref $2
+_get_service_name() {
+  local compose_file="$1"
+  local -n result="$2"
+
+  # Use yq to extract the first service name from the compose file
+  if command -v yq > /dev/null 2>&1; then
+    result="$(yq '.services | to_entries | .[0].key' "${compose_file}")"
+  else
+    # Fallback: grep for the first service key
+    result="$(grep -E '^\s+[a-z]' "${compose_file}" | head -1 | tr -d ' :')"
+  fi
+
+  if [[ -z "${result}" ]]; then
+    lib::std::logger -l error -m "could not determine service name from compose file"
+    return 1
+  fi
+}
+
+main() {
+  _require_podman_compose
+
+  local project_name=""
+  local -a cmd=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -n | --name)
+        if [[ -z "${2:-}" ]] || [[ "${2}" == -* ]]; then
+          lib::std::logger -l error -m "--name requires a project name argument"
+          return 1
+        fi
+        project_name="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        ;;
+      --)
+        shift
+        cmd=("$@")
+        break
+        ;;
+      -*)
+        lib::std::logger -l error -m "unknown option: $1"
+        return 1
+        ;;
+      *)
+        cmd=("$@")
+        break
+        ;;
+    esac
+  done
+
+  # Validate project name was provided
+  if [[ -z "${project_name}" ]]; then
+    lib::std::logger -l error -m "--name is required"
+    return 1
+  fi
+
+  # Check if session exists
+  if ! _session_exists "${project_name}"; then
+    lib::std::logger -l error -m "session \"${project_name}\" is not running. Start it first: ${_SKILL_ROOT}/bin/start --compose <file> --name ${project_name}"
+    return 1
+  fi
+
+  # Default command: drop into an interactive shell
+  if (( ${#cmd[@]} == 0 )); then
+    cmd=(/bin/bash)
+  fi
+
+  # Get the container name from the running session
+  local container_name
+  container_name="$(podman ps --filter "label=com.docker.compose.project=${project_name}" --format '{{.Names}}' 2>/dev/null | head -1)"
+
+  if [[ -z "${container_name}" ]]; then
+    lib::std::logger -l error -m "could not find container for session \"${project_name}\""
+    return 1
+  fi
+
+  # Run the command using podman exec directly
+  exec podman exec -it "${container_name}" "${cmd[@]}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

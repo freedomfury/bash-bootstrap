@@ -1,0 +1,18 @@
+#!/bin/sh
+# vendor/clean -- Wipe the statically-compiled project toolkit.
+# Can be run from the root as ./vendor/clean or from inside the vendor directory.
+
+set -eu
+
+_BIN_DIR="$(dirname "$0")"
+cd "$_BIN_DIR" || exit 1
+
+printf '==- vendor/clean: wiping toolkit... -==\n'
+
+# -- Delete all binaries
+rm -rf bin/
+
+# -- Delete the sentinel
+rm -f ../vendor.lock
+
+printf '==- vendor/clean: complete. -==\n'

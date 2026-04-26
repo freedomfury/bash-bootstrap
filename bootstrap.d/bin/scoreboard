@@ -1,0 +1,102 @@
+#!/usr/bin/env mks-bash
+# bootstrap.d/bin/scoreboard -- Walk scores tree, assemble report, emit to journal
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  printf 'FATAL: MKS_ROOT is not set — run via make or source exports first\n' >&2
+  exit 3
+}
+
+readonly _SELF="${0##*/}"
+
+# shellcheck source=bootstrap.d/lib/defaults.sh
+source "${MKS_ROOT}/bootstrap.d/lib/defaults.sh"
+
+# BSS_TMP is defined in bootstrap.d/exports, sourced transitively via defaults.sh
+# shellcheck disable=SC2154
+
+readonly _SCORES_DIR="${BSS_TMP}/scores"
+readonly _PHASES=(initialize install configure execute)
+
+# -- _read_file: read a file and print its contents, or a fallback if missing
+_read_file() {
+  local path="$1"
+  local fallback="${2:--}"
+  if [[ -f "${path}" ]]; then
+    tr -d '\n' < "${path}"
+  else
+    printf '%s' "${fallback}"
+  fi
+}
+
+# -- _build_report: walk scores tree and assemble a summary
+_build_report() {
+  local _overall=0
+  local _report=""
+
+  if [[ ! -d "${_SCORES_DIR}" ]]; then
+    _report="no score data found — tasks may not have run"
+    printf '%s\n' "${_report}"
+    return 0
+  fi
+
+  local _task
+  for _task_dir in "${_SCORES_DIR}"/*/; do
+    [[ -d "${_task_dir}" ]] || continue
+    _task="${_task_dir%/}"
+    _task="${_task##*/}"
+
+    local _task_line="task=${_task}"
+    local _phase
+    for _phase in "${_PHASES[@]}"; do
+      local _rc_file="${_SCORES_DIR}/${_task}/${_phase}/rc"
+      local _rc
+      _rc="$(_read_file "${_rc_file}" "?")"
+      _task_line+=" ${_phase}=${_rc}"
+      if [[ "${_rc}" != "0" && "${_rc}" != "?" ]]; then
+        _overall=1
+      fi
+    done
+    _report+="${_task_line}"$'\n'
+  done
+
+  printf '%s' "${_report}"
+  return "${_overall}"
+}
+
+main() {
+  lib::std::logger -l info -m "${_SELF}: assembling scoreboard"
+
+  local _report
+  local _overall=0
+  # shellcheck disable=SC2310  # || is intentional: capture non-zero overall without triggering set -e
+  _report="$(_build_report)" || _overall=$?
+
+  local _level="info"
+  (( _overall == 0 )) || _level="error"
+
+  # -- Emit each line to the logger
+  while IFS= read -r _line; do
+    [[ -n "${_line}" ]] || continue
+    lib::std::logger -l "${_level}" -m "${_SELF}: ${_line}"
+  done <<< "${_report}"
+
+  # -- Also emit to systemd journal if available
+  if command -v systemd-cat &>/dev/null; then
+    printf '%s\n' "${_report}" \
+      | systemd-cat --identifier="bootstrap-scoreboard" --priority="${_level}"
+  fi
+
+  if (( _overall != 0 )); then
+    lib::std::logger -l error -m "${_SELF}: one or more tasks failed"
+  else
+    lib::std::logger -l info -m "${_SELF}: all tasks passed"
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

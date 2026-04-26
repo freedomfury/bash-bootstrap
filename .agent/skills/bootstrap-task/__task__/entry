@@ -1,0 +1,78 @@
+#!/usr/bin/env mks-bash
+# bootstrap.d/tasks/__task__/entry -- __task__ task entry point
+
+set -euo pipefail
+shopt -s inherit_errexit
+IFS=$'\n\t'
+
+[[ -n "${MKS_ROOT:-}" ]] || {
+  printf 'FATAL: MKS_ROOT is not set — run via make or source exports first\n' >&2
+  exit 3
+}
+
+readonly _SELF="${0##*/}"
+readonly _TASK="__task__"
+
+# -- Task variables (sourced first so globals can override)
+# shellcheck source=bootstrap.d/tasks/__task__/vars/default.env
+source "${MKS_ROOT}/bootstrap.d/tasks/__task__/vars/default.env"
+
+# -- Subproject environment (provides BSS_ROOT, BSS_TMP, common libs, and logger)
+# shellcheck source=bootstrap.d/lib/defaults.sh
+source "${MKS_ROOT}/bootstrap.d/lib/defaults.sh"
+
+# -- Phase runner (provides _runner)
+# shellcheck source=bootstrap.d/lib/runner.sh
+source "${MKS_ROOT}/bootstrap.d/lib/runner.sh"
+
+tasks::__task__::initialize() {
+  lib::std::logger -l info -m "__task__: initializing"
+  # Placeholder: query system state, cache task-level facts
+  sleep 1
+  lib::std::logger -l info -m "__task__: initialized"
+}
+
+tasks::__task__::install() {
+  lib::std::logger -l info -m "__task__: installing"
+  # Placeholder: install packages, binaries, users, directories
+  sleep 1
+  lib::std::logger -l info -m "__task__: installed"
+}
+
+tasks::__task__::configure() {
+  lib::std::logger -l debug -m "__task__: configuring"
+  # Placeholder: render templates, write config files, set permissions
+  sleep 0.5
+  lib::std::logger -l debug -m "__task__: configured"
+}
+
+tasks::__task__::execute() {
+  lib::std::logger -l info -m "__task__: executing"
+  # Placeholder: enable or start the service, apply live configuration
+  sleep 1
+  lib::std::logger -l info -m "__task__: done"
+}
+
+task::__task__::main() {
+  # -- Tag filter: skip if this task's tag is not in BSS_GLB_TAGS
+  if [[ -n "${BSS_GLB_TAGS[*]:-}" ]]; then
+    local _tag
+    for _tag in "${BSS_GLB_TAGS[@]}"; do
+      [[ "${_tag}" == "${BSS__TASK__TAG}" ]] && break
+      _tag=''
+    done
+    if [[ -z "${_tag:-}" ]]; then
+      lib::std::logger -l info -m "__task__: tag '${BSS__TASK__TAG}' not active — skipping"
+      return 0
+    fi
+  fi
+
+  bss::lib::runner -t "${_TASK}" -f initialize
+  bss::lib::runner -t "${_TASK}" -f install
+  bss::lib::runner -t "${_TASK}" -f configure
+  bss::lib::runner -t "${_TASK}" -f execute
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  task::__task__::main "$@"
+fi

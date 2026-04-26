@@ -1,0 +1,27 @@
+<%- macro render_provisioner(p) -%>
+  provisioner "<%= p.type %>" {
+    <%- for key, value in p|items if key != "type" %>
+    <%- if value is string %>
+    <%= key %> = "<%= value %>"
+    <%- elif value is sequence %>
+    <%= key %> = [
+      <%- for item in value %>
+      <%- if item is string %>
+      "<%= item %>",
+      <%- else %>
+      <%= item %>,
+      <%- endif %>
+      <%- endfor %>
+    ]
+    <%- elif value is mapping %>
+    <%= key %> = {
+      <%- for k, v in value|items %>
+      <%= k %> = "<%= v %>"
+      <%- endfor %>
+    }
+    <%- else %>
+    <%= key %> = <%= value %>
+    <%- endif %>
+    <%- endfor %>
+  }
+<%- endmacro -%>

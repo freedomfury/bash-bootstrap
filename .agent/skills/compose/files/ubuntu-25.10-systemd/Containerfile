@@ -1,0 +1,11 @@
+FROM ubuntu:25.10
+ENV container docker
+# Install systemd and clean up
+RUN apt-get update && apt-get install -y systemd systemd-sysv && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# Systemd requires this to identify the machine
+RUN touch /etc/machine-id
+# Set the entrypoint to systemd
+STOPSIGNAL SIGRTMIN+3
+CMD ["/lib/systemd/systemd"]
